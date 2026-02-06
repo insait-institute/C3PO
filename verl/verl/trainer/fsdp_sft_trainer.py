@@ -543,6 +543,7 @@ class FSDPSFTTrainer:
             "train/loss": step_loss.detach().item(),
             "train/lr": lr,
             "train/time(s)": spend_time_per_step,
+            "optim/grad_norm": grad_norm.detach().item(),
         }
 
     def validation_step(self, batch: TensorDict):
