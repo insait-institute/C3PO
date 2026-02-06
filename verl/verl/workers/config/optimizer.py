@@ -15,6 +15,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Optional
 
+import torch
 from omegaconf import MISSING
 
 from verl.base_config import BaseConfig
@@ -175,13 +176,15 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         "lr": config.lr,
         "weight_decay": config.weight_decay,
     }
-
+    optim_load_path = None
     optimizer_name_lower = config.optimizer.lower()
     if "adam" in optimizer_name_lower or "ademamix" in optimizer_name_lower:
         optimizer_args["betas"] = config.betas
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
+        if "ivon" in optimizer_name_lower and optimizer_args.get("optimizer_load_path"):
+            optim_load_path = optimizer_args.pop("optimizer_load_path")
 
     try:
         module = importlib.import_module(config.optimizer_impl)
@@ -192,8 +195,15 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         ) from e
     except AttributeError as e:
         raise AttributeError(
-            f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'. "
+            f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'."
             f"Available optimizers: {dir(module)}"
         ) from e
 
-    return optimizer_cls(parameters, **optimizer_args)
+    optimizer = optimizer_cls(parameters, **optimizer_args)
+    if "ivon" in optimizer_name_lower:
+        if optim_load_path:
+            optimizer.load_state_dict(torch.load(optim_load_path))
+        for group in optimizer.param_groups:
+            group["initial_lr"] = config.lr
+            group["lr"] = config.lr
+    return optimizer

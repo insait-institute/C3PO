@@ -72,7 +72,11 @@ from verl.utils.logger import log_with_rank
 from verl.utils.profiler import log_gpu_memory_usage
 from verl.utils.py_functional import convert_to_regular_types
 from verl.utils.torch_dtypes import PrecisionType
-from verl.utils.torch_functional import get_cosine_schedule_with_warmup, get_wsd_schedule_with_warmup
+from verl.utils.torch_functional import (
+    get_constant_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
+    get_wsd_schedule_with_warmup,
+)
 from verl.utils.tracking import Tracking
 from verl.utils.ulysses import (
     gather_outputs_and_unpad,
@@ -190,19 +194,19 @@ class FSDPSFTTrainer:
             drop_last=True,
             pin_memory_device=device_name,
         )
-
-        self.val_sampler = DistributedSampler(
-            self.val_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=True
-        )
-        self.val_dataloader = StatefulDataLoader(
-            dataset=self.val_dataset,
-            batch_size=config.data.micro_batch_size_per_gpu,
-            sampler=self.val_sampler,
-            num_workers=8,
-            pin_memory=True,
-            drop_last=True,
-            pin_memory_device=device_name,
-        )
+        if self.val_dataset:
+            self.val_sampler = DistributedSampler(
+                self.val_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=True
+            )
+            self.val_dataloader = StatefulDataLoader(
+                dataset=self.val_dataset,
+                batch_size=config.data.micro_batch_size_per_gpu,
+                sampler=self.val_sampler,
+                num_workers=8,
+                pin_memory=True,
+                drop_last=True,
+                pin_memory_device=device_name,
+            )
 
     def _build_model_optimizer(self):
         # TODO (zhangchi.usc1992):
@@ -219,7 +223,7 @@ class FSDPSFTTrainer:
         log_gpu_memory_usage("Before model allocation", logger=logger)
 
         trust_remote_code = self.config.model.trust_remote_code
-        torch_dtype = self.config.model.fsdp_config.get("model_dtype", "fp32")
+        torch_dtype = self.config.model.fsdp_config.get("model_dtype", "bf16")
         torch_dtype = PrecisionType.to_dtype(torch_dtype)
         # load config first
         config = AutoConfig.from_pretrained(local_model_path, trust_remote_code=trust_remote_code)
@@ -352,8 +356,9 @@ class FSDPSFTTrainer:
 
         if self.device_mesh.get_rank() == 0:
             print(
-                f"Number of steps/epoch {self.steps_per_epoch}, number of epochs "
-                f"{self.config.trainer.total_epochs}, total number of steps {self.total_steps}"
+                f"Number of steps/epoch {self.steps_per_epoch},"
+                f"number of epochs {self.config.trainer.total_epochs},"
+                f"total number of steps {self.total_steps}"
             )
 
         num_warmup_steps = int(self.total_steps * self.config.optim.lr_warmup_steps_ratio)
@@ -364,6 +369,10 @@ class FSDPSFTTrainer:
             )
         elif self.config.optim.lr_scheduler == "wsd":
             self.lr_scheduler = get_wsd_schedule_with_warmup(
+                optimizer=self.optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=self.total_steps
+            )
+        elif self.config.optim.lr_scheduler == "constant":
+            self.lr_scheduler = get_constant_schedule_with_warmup(
                 optimizer=self.optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=self.total_steps
             )
         else:
@@ -381,8 +390,14 @@ class FSDPSFTTrainer:
         loss_fct = nn.CrossEntropyLoss(reduction="none")
 
         # Context manager for sequence parallel if needed
-        context = self.sharding_manager if use_sp else nullcontext()
-        with context, torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
+        sp_context = self.sharding_manager if use_sp else nullcontext()
+        ivon_context = (
+            self.optimizer.sampled_params(train=True)
+            if self.config.optim.optimizer.lower() == "ivon"
+            else nullcontext()
+        )
+
+        with sp_context, ivon_context, torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
             if not use_sp:
                 # Standard forward pass without sequence parallel
                 labels = input_ids[:, 1:].contiguous()
@@ -739,6 +754,12 @@ class FSDPSFTTrainer:
             log_only_rank_0=True,
         )
 
+        if isinstance(self.config.trainer.save_freq, float):
+            self.config.trainer.save_freq = int(total_training_steps * self.config.trainer.save_freq)
+
+        if isinstance(self.config.trainer.test_freq, float):
+            self.config.trainer.test_freq = int(total_training_steps * self.config.trainer.test_freq)
+
         # With StatefulDataLoader, we don't need to manually calculate epochs and steps
         # The dataloader will automatically resume from where it left off
         if global_step > 0:
@@ -773,11 +794,11 @@ class FSDPSFTTrainer:
                     tracking.log(data=metric, step=global_step)
 
                 is_last_step = global_step >= self.total_training_steps
-                is_valid_step = global_step % self.config.trainer.test_freq == 0
-                is_save_step = global_step % self.config.trainer.save_freq == 0
+                is_valid_step = self.config.trainer.test_freq and global_step % self.config.trainer.test_freq == 0
+                is_save_step = self.config.trainer.save_freq and global_step % self.config.trainer.save_freq == 0
 
                 # early exit or validation step
-                if is_last_step or (self.config.trainer.test_freq > 0 and is_valid_step):
+                if self.config.trainer.test_freq > 0 and is_valid_step:
                     # Perform validation
                     val_losses = []
                     for val_data in self.val_dataloader:
@@ -818,13 +839,22 @@ def run_sft(config):
     from verl.utils import hf_tokenizer
 
     local_model_path = copy_to_local(src=config.model.partial_pretrain, verbose=True)
-    tokenizer = hf_tokenizer(local_model_path, trust_remote_code=config.model.trust_remote_code)
+    tokenizer = hf_tokenizer(
+        config.data.get("tokenizer_path", local_model_path), trust_remote_code=config.model.trust_remote_code
+    )
+    assert tokenizer.eos_token_id != tokenizer.pad_token_id, (
+        f"Tokenizer should have different eos and pad tokens for SFT, found both to be {tokenizer.eos_token_id}"
+    )
     train_dataset = create_sft_dataset(
         config.data.train_files, config.data, tokenizer, max_samples=config.data.get("train_max_samples", -1)
     )
-    val_dataset = create_sft_dataset(
-        config.data.val_files, config.data, tokenizer, max_samples=config.data.get("val_max_samples", -1)
-    )
+    if config.data.val_files:
+        val_dataset = create_sft_dataset(
+            config.data.val_files, config.data, tokenizer, max_samples=config.data.get("val_max_samples", -1)
+        )
+    else:
+        val_dataset = None
+        config.trainer.test_freq = 0
 
     trainer = FSDPSFTTrainer(
         config=config,

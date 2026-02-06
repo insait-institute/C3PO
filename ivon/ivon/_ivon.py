@@ -1,11 +1,12 @@
+from contextlib import contextmanager
 from math import pow
 from typing import Callable, Optional, Tuple
-from contextlib import contextmanager
-import torch
-import torch.optim
-import torch.distributed as dist
-from torch import Tensor
 
+import torch
+import torch.distributed as dist
+import torch.optim
+from torch import Tensor
+from torch.distributed.tensor import DTensor, distribute_tensor
 
 ClosureType = Callable[[], Tensor]
 
@@ -53,7 +54,7 @@ class IVON(torch.optim.Optimizer):
         if not 0.0 <= beta2 <= 1.0:
             raise ValueError("Invalid beta2 parameter: {}".format(beta2))
         if hess_approx not in self.hessian_approx_methods:
-            raise ValueError("Invalid hess_approx parameter: {}".format(beta2))
+            raise ValueError("Invalid hess_approx parameter: {}".format(hess_approx))
 
         defaults = dict(
             lr=lr,
@@ -70,7 +71,9 @@ class IVON(torch.optim.Optimizer):
         self.mc_samples = mc_samples
         self.hess_approx = hess_approx
         self.sync = sync
-        self._numel, self._device, self._dtype = self._get_param_configs()
+        self._numel, self._local_numel, self._device, self._dtype = (
+            self._get_param_configs()
+        )
         self.current_step = 0
         self.debias = debias
         self.rescale_lr = rescale_lr
@@ -84,9 +87,14 @@ class IVON(torch.optim.Optimizer):
         all_params = []
         for pg in self.param_groups:
             pg["numel"] = sum(p.numel() for p in pg["params"] if p is not None)
+            pg["local_numel"] = sum(
+                (p.to_local().numel() if isinstance(p, DTensor) else p.numel())
+                for p in pg["params"]
+                if p is not None
+            )
             all_params += [p for p in pg["params"] if p is not None]
         if len(all_params) == 0:
-            return 0, torch.device("cpu"), torch.get_default_dtype()
+            return 0, 0, torch.device("cpu"), torch.get_default_dtype()
         devices = {p.device for p in all_params}
         if len(devices) > 1:
             raise ValueError(
@@ -99,8 +107,13 @@ class IVON(torch.optim.Optimizer):
                 f"Parameters are on different dtypes: {[str(d) for d in dtypes]}"
             )
         dtype = next(iter(dtypes))
-        total = sum(pg["numel"] for pg in self.param_groups)
-        return total, device, dtype
+        # global_total uses the global numels we just set in the pg dict
+        global_total = sum(pg["numel"] for pg in self.param_groups)
+        # local_total is what we use for the final buffer assertions.
+        # This is needed because DTensors are sharded across ranks.
+        # If we don't use FSDP, local_total will be equal to global_total.
+        local_total = sum(pg["local_numel"] for pg in self.param_groups)
+        return global_total, local_total, device, dtype
 
     def _reset_samples(self):
         self.state["count"] = 0
@@ -110,14 +123,16 @@ class IVON(torch.optim.Optimizer):
 
     def _init_buffers(self):
         for group in self.param_groups:
-            hess_init, numel = group["hess_init"], group["numel"]
+            l_numel = group["local_numel"]
+            hess_init = group["hess_init"]
 
             group["momentum"] = torch.zeros(
-                numel, device=self._device, dtype=self._dtype
+                l_numel, device=self._device, dtype=self._dtype
             )
-            group["hess"] = torch.zeros(
-                numel, device=self._device, dtype=self._dtype
-            ).add(torch.as_tensor(hess_init))
+
+            group["hess"] = torch.full(
+                (l_numel,), hess_init, device=self._device, dtype=self._dtype
+            )
 
     @contextmanager
     def sampled_params(self, train: bool = False):
@@ -133,17 +148,42 @@ class IVON(torch.optim.Optimizer):
                 if p is None:
                     continue
 
-                p_slice = slice(offset, offset + p.numel())
+                # Determine the size of the data we actually stored for this rank
+                if isinstance(p, DTensor):
+                    local_tensor = p.to_local()
+                    current_numel = local_tensor.numel()
+                else:
+                    current_numel = p.numel()
 
-                p.data = param_avg[p_slice].view(p.shape)
+                p_slice = slice(offset, offset + current_numel)
+                restore_data = param_avg[p_slice]
+
+                if isinstance(p, DTensor):
+                    local_tensor = p.to_local()
+                    local_tensor.data.copy_(restore_data.view(local_tensor.shape))
+                else:
+                    p.data.copy_(restore_data.view(p.shape))
+
                 if train:
                     if p.requires_grad:
-                        param_grads.append(p.grad.flatten())
+                        # Ensure we grab the local grad if it's a DTensor
+                        g = p.grad.to_local() if isinstance(p, DTensor) else p.grad
+                        param_grads.append(g.flatten())
                     else:
-                        param_grads.append(torch.zeros_like(p).flatten())
-                offset += p.numel()
-        assert offset == self._numel  # sanity check
+                        # Match the local size for the zero tensor
+                        z_size = (
+                            local_tensor.shape if isinstance(p, DTensor) else p.shape
+                        )
+                        param_grads.append(
+                            torch.zeros(
+                                z_size, device=p.device, dtype=p.dtype
+                            ).flatten()
+                        )
 
+                offset += current_numel
+        assert offset == self._local_numel, (
+            f"Offset {offset} does not match total number of parameters {self._local_numel}"
+        )
         if train:  # collect grad sample for training
             grad_sample = torch.cat(param_grads, 0)
             count = self.state["count"] + 1
@@ -187,50 +227,95 @@ class IVON(torch.optim.Optimizer):
     def _sample_params(self) -> Tuple[Tensor, Tensor]:
         noise_samples = []
         param_avgs = []
+        sync_seed = self.current_step + 42
+        g = torch.Generator(device=self._device)
+        g.manual_seed(sync_seed)
 
-        offset = 0
+        local_offset = 0
         for group in self.param_groups:
             gnumel = group["numel"]
-            noise_sample = (
-                torch.randn(gnumel, device=self._device, dtype=self._dtype)
-                / (group["ess"] * (group["hess"] + group["weight_decay"])).sqrt()
+            raw_noise_sample = torch.randn(
+                gnumel, device=self._device, dtype=self._dtype, generator=g
             )
-            noise_samples.append(noise_sample)
 
             goffset = 0
+            group_noise = []
             for p in group["params"]:
                 if p is None:
                     continue
 
-                p_avg = p.data.flatten()
-                numel = p.numel()
-                p_noise = noise_sample[goffset : goffset + numel]
+                p_global_numel = p.numel()
+                p_raw_noise_slice = raw_noise_sample[goffset : goffset + p_global_numel]
 
-                param_avgs.append(p_avg)
-                p.data = (p_avg + p_noise).view(p.shape)
-                goffset += numel
-                offset += numel
-            assert goffset == group["numel"]  # sanity check
-        assert offset == self._numel  # sanity check
+                if isinstance(p, DTensor):
+                    # to_local() returns a torch.Tensor that is a view of the DTensor
+                    # any changes to _local.data will be reflected in the DTensor
+                    p_local: torch.Tensor = p.to_local()
+                    param_avgs.append(p_local.data.flatten().clone())
 
+                    p_noise_dtensor: DTensor = distribute_tensor(
+                        p_raw_noise_slice.view(p.shape),
+                        p.device_mesh,
+                        p.placements,
+                    )
+                    local_p_numel = p_local.numel()
+                    h_slice: torch.Tensor = group["hess"][
+                        local_offset : local_offset + local_p_numel
+                    ]
+
+                    p_noise_local: torch.Tensor = (
+                        p_noise_dtensor.to_local()
+                        / (
+                            group["ess"]
+                            * (h_slice.view(p_local.shape) + group["weight_decay"])
+                        ).sqrt()
+                    )
+                    p_local.data.add_(p_noise_local)
+
+                    group_noise.append(p_noise_local.flatten())
+                    local_offset += local_p_numel
+                else:
+                    param_avgs.append(p.data.flatten().clone())
+                    scaled_noise = (
+                        p_raw_noise_slice.view(p.shape)
+                        / (
+                            group["ess"] * (group["hess"] + group["weight_decay"])
+                        ).sqrt()
+                    )
+                    p.data.add_(scaled_noise)
+                    group_noise.append(scaled_noise.flatten())
+                    local_offset += p_global_numel
+
+                goffset += p_global_numel
+            assert goffset == gnumel
+            noise_samples.append(torch.cat(group_noise, 0))
+
+        assert local_offset == self._local_numel
         return torch.cat(param_avgs, 0), torch.cat(noise_samples, 0)
 
     def _update(self):
         self.current_step += 1
 
-        offset = 0
+        local_offset = 0
         for group in self.param_groups:
             lr = group["lr"]
             b1 = group["beta1"]
             b2 = group["beta2"]
-            pg_slice = slice(offset, offset + group["numel"])
 
-            param_avg = torch.cat(
-                [p.flatten() for p in group["params"] if p is not None], 0
-            )
+            l_numel = group["local_numel"]
+            local_pg_slice = slice(local_offset, local_offset + l_numel)
+
+            param_avg_list = []
+            for p in group["params"]:
+                if p is not None:
+                    if isinstance(p, DTensor):
+                        param_avg_list.append(p.to_local().flatten())
+                    else:
+                        param_avg_list.append(p.flatten())
+            param_avg = torch.cat(param_avg_list, 0)
 
             group["momentum"] = self._new_momentum(
-                self.state["avg_grad"][pg_slice], group["momentum"], b1
+                self.state["avg_grad"][local_pg_slice], group["momentum"], b1
             )
 
             group["hess"] = self._new_hess(
@@ -238,7 +323,7 @@ class IVON(torch.optim.Optimizer):
                 group["hess"],
                 self.state["avg_nxg"],
                 self.state["avg_gsq"],
-                pg_slice,
+                local_pg_slice,
                 group["ess"],
                 b2,
                 group["weight_decay"],
@@ -257,15 +342,29 @@ class IVON(torch.optim.Optimizer):
                 group["hess_init"],
             )
 
-            # update params
-            pg_offset = 0
+            pg_local_offset = 0
             for p in group["params"]:
                 if p is not None:
-                    p.data = param_avg[pg_offset : pg_offset + p.numel()].view(p.shape)
-                    pg_offset += p.numel()
-            assert pg_offset == group["numel"]  # sanity check
-            offset += group["numel"]
-        assert offset == self._numel  # sanity check
+                    if isinstance(p, DTensor):
+                        p_local = p.to_local()
+                        p_local.data.copy_(
+                            param_avg[
+                                pg_local_offset : pg_local_offset + p_local.numel()
+                            ].view(p_local.shape)
+                        )
+                        pg_local_offset += p_local.numel()
+                    else:
+                        p.data.copy_(
+                            param_avg[
+                                pg_local_offset : pg_local_offset + p.numel()
+                            ].view(p.shape)
+                        )
+                        pg_local_offset += p.numel()
+
+            assert pg_local_offset == l_numel
+            local_offset += l_numel
+
+        assert local_offset == self._local_numel
 
     @staticmethod
     def _get_nll_hess(method: str, hess, avg_nxg, avg_gsq, pg_slice) -> Tensor:
