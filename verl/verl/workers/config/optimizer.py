@@ -180,6 +180,9 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
     optimizer_name_lower = config.optimizer.lower()
     if "adam" in optimizer_name_lower or "ademamix" in optimizer_name_lower:
         optimizer_args["betas"] = config.betas
+    elif "ivon" in optimizer_name_lower:
+        optimizer_args["beta1"] = config.betas[0]
+        optimizer_args["beta2"] = config.betas[1]
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
