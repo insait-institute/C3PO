@@ -15,13 +15,12 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     python_requires=">=3.8",
-    license='GPLv3+',
-    author='IVON Team',
-    author_email='ivonteam@googlegroups.com',
+    license="GPLv3+",
+    author="IVON Team",
+    author_email="ivonteam@googlegroups.com",
     classifiers=[
         "Programming Language :: Python :: 3",
-        'License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)',
+        "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
         "Operating System :: OS Independent",
     ],
 )
-

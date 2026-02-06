@@ -16,8 +16,8 @@ def _welford_mean(avg: Optional[Tensor], newval: Tensor, count: int) -> Tensor:
 
 class IVON(torch.optim.Optimizer):
     hessian_approx_methods = (
-        'price',
-        'gradsq',
+        "price",
+        "gradsq",
     )
 
     def __init__(
@@ -30,24 +30,20 @@ class IVON(torch.optim.Optimizer):
         beta2: float = 0.99999,
         weight_decay: float = 1e-4,
         mc_samples: int = 1,
-        hess_approx: str = 'price',
+        hess_approx: str = "price",
         clip_radius: float = float("inf"),
         sync: bool = False,
         debias: bool = True,
-        rescale_lr: bool = True
+        rescale_lr: bool = True,
     ):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 1 <= mc_samples:
-            raise ValueError(
-                "Invalid number of MC samples: {}".format(mc_samples)
-            )
+            raise ValueError("Invalid number of MC samples: {}".format(mc_samples))
         if not 0.0 <= weight_decay:
             raise ValueError("Invalid weight decay: {}".format(weight_decay))
         if not 0.0 < hess_init:
-            raise ValueError(
-                "Invalid Hessian initialization: {}".format(hess_init)
-            )
+            raise ValueError("Invalid Hessian initialization: {}".format(hess_init))
         if not 0.0 < ess:
             raise ValueError("Invalid effective sample size: {}".format(ess))
         if not 0.0 < clip_radius:
@@ -94,25 +90,23 @@ class IVON(torch.optim.Optimizer):
         devices = {p.device for p in all_params}
         if len(devices) > 1:
             raise ValueError(
-                "Parameters are on different devices: "
-                f"{[str(d) for d in devices]}"
+                f"Parameters are on different devices: {[str(d) for d in devices]}"
             )
         device = next(iter(devices))
         dtypes = {p.dtype for p in all_params}
         if len(dtypes) > 1:
             raise ValueError(
-                "Parameters are on different dtypes: "
-                f"{[str(d) for d in dtypes]}"
+                f"Parameters are on different dtypes: {[str(d) for d in dtypes]}"
             )
         dtype = next(iter(dtypes))
         total = sum(pg["numel"] for pg in self.param_groups)
         return total, device, dtype
 
     def _reset_samples(self):
-        self.state['count'] = 0
-        self.state['avg_grad'] = None
-        self.state['avg_nxg'] = None
-        self.state['avg_gsq'] = None
+        self.state["count"] = 0
+        self.state["avg_grad"] = None
+        self.state["avg_nxg"] = None
+        self.state["avg_gsq"] = None
 
     def _init_buffers(self):
         for group in self.param_groups:
@@ -131,9 +125,7 @@ class IVON(torch.optim.Optimizer):
         yield
         self._restore_param_average(train, param_avg, noise)
 
-    def _restore_param_average(
-        self, train: bool, param_avg: Tensor, noise: Tensor
-    ):
+    def _restore_param_average(self, train: bool, param_avg: Tensor, noise: Tensor):
         param_grads = []
         offset = 0
         for group in self.param_groups:
@@ -159,12 +151,14 @@ class IVON(torch.optim.Optimizer):
             self.state["avg_grad"] = _welford_mean(
                 self.state["avg_grad"], grad_sample, count
             )
-            if self.hess_approx == 'price':
-                self.state['avg_nxg'] = _welford_mean(
-                    self.state['avg_nxg'], noise * grad_sample, count)
-            elif self.hess_approx == 'gradsq':
-                self.state['avg_gsq'] = _welford_mean(
-                    self.state['avg_gsq'], grad_sample.square(), count)
+            if self.hess_approx == "price":
+                self.state["avg_nxg"] = _welford_mean(
+                    self.state["avg_nxg"], noise * grad_sample, count
+                )
+            elif self.hess_approx == "gradsq":
+                self.state["avg_gsq"] = _welford_mean(
+                    self.state["avg_gsq"], grad_sample.square(), count
+                )
 
     @torch.no_grad()
     def step(self, closure: ClosureType = None) -> Optional[Tensor]:
@@ -199,9 +193,7 @@ class IVON(torch.optim.Optimizer):
             gnumel = group["numel"]
             noise_sample = (
                 torch.randn(gnumel, device=self._device, dtype=self._dtype)
-                / (
-                    group["ess"] * (group["hess"] + group["weight_decay"])
-                ).sqrt()
+                / (group["ess"] * (group["hess"] + group["weight_decay"])).sqrt()
             )
             noise_samples.append(noise_sample)
 
@@ -245,7 +237,7 @@ class IVON(torch.optim.Optimizer):
                 self.hess_approx,
                 group["hess"],
                 self.state["avg_nxg"],
-                self.state['avg_gsq'],
+                self.state["avg_gsq"],
                 pg_slice,
                 group["ess"],
                 b2,
@@ -256,20 +248,20 @@ class IVON(torch.optim.Optimizer):
                 param_avg,
                 group["hess"],
                 group["momentum"],
-                lr * (group["hess_init"] + group["weight_decay"]) if self.rescale_lr else lr,
+                lr * (group["hess_init"] + group["weight_decay"])
+                if self.rescale_lr
+                else lr,
                 group["weight_decay"],
                 group["clip_radius"],
                 1.0 - pow(b1, float(self.current_step)) if self.debias else 1.0,
-                group["hess_init"]
+                group["hess_init"],
             )
 
             # update params
             pg_offset = 0
             for p in group["params"]:
                 if p is not None:
-                    p.data = param_avg[pg_offset : pg_offset + p.numel()].view(
-                        p.shape
-                    )
+                    p.data = param_avg[pg_offset : pg_offset + p.numel()].view(p.shape)
                     pg_offset += p.numel()
             assert pg_offset == group["numel"]  # sanity check
             offset += group["numel"]
@@ -277,26 +269,25 @@ class IVON(torch.optim.Optimizer):
 
     @staticmethod
     def _get_nll_hess(method: str, hess, avg_nxg, avg_gsq, pg_slice) -> Tensor:
-        if method == 'price':
+        if method == "price":
             return avg_nxg[pg_slice] * hess
-        elif method == 'gradsq':
+        elif method == "gradsq":
             return avg_gsq[pg_slice]
         else:
-            raise NotImplementedError(f'unknown hessian approx.: {method}')
+            raise NotImplementedError(f"unknown hessian approx.: {method}")
 
     @staticmethod
     def _new_momentum(avg_grad, m, b1) -> Tensor:
         return b1 * m + (1.0 - b1) * avg_grad
 
     @staticmethod
-    def _new_hess(
-        method, hess, avg_nxg, avg_gsq, pg_slice, ess, beta2, wd
-    ) -> Tensor:
-        f = IVON._get_nll_hess(
-            method, hess + wd, avg_nxg, avg_gsq, pg_slice
-        ) * ess
-        return beta2 * hess + (1.0 - beta2) * f + \
-            (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd)
+    def _new_hess(method, hess, avg_nxg, avg_gsq, pg_slice, ess, beta2, wd) -> Tensor:
+        f = IVON._get_nll_hess(method, hess + wd, avg_nxg, avg_gsq, pg_slice) * ess
+        return (
+            beta2 * hess
+            + (1.0 - beta2) * f
+            + (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd)
+        )
 
     @staticmethod
     def _new_param_averages(
