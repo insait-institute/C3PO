@@ -3,7 +3,7 @@ set -x
 
 nnodes=1
 nproc_per_node=2
-
+master_port=${MASTER_PORT:-29500}
 project_name=bayesrl
 experiment_name=adamw-olmo2-1b-sft
 
@@ -17,6 +17,7 @@ SAVE_PATH=$SAVE_ROOT/$experiment_name
 
 torchrun --nnodes=$nnodes \
      --nproc_per_node=$nproc_per_node \
+     --master_port=$master_port \
      -m verl.trainer.fsdp_sft_trainer \
     data.train_files=$TRAIN_DATA \
     data.val_files=$EVAL_DATA \
