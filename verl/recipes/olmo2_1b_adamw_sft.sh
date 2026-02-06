@@ -7,7 +7,7 @@ nproc_per_node=2
 project_name=bayesrl
 experiment_name=adamw-olmo2-1b-sft
 
-DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl-ivon/data"}
+DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
 TRAIN_DATA=$DATA_ROOT/tulu-3-sft-olmo-2-mixture-0225.parquet
 EVAL_DATA=null
@@ -38,6 +38,8 @@ torchrun --nnodes=$nnodes \
     trainer.total_epochs=2 \
     trainer.save_freq=0.1 \
     trainer.test_freq=null \
+    trainer.nnodes=$nnodes \
+    trainer.n_gpus_per_node=$nproc_per_node \
     model.enable_gradient_checkpointing=false \
     ulysses_sequence_parallel_size=1 \
     use_remove_padding=true \

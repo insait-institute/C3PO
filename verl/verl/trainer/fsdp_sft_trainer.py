@@ -541,7 +541,7 @@ class FSDPSFTTrainer:
             step_loss /= self.device_mesh.size(0)
         return {
             "train/loss": step_loss.detach().item(),
-            "train/lr(1e-3)": lr * 1e3,
+            "train/lr": lr,
             "train/time(s)": spend_time_per_step,
         }
 
