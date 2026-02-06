@@ -55,7 +55,7 @@ from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
+    AutoModelForImageTextToText ,
     GenerationConfig,
     PretrainedConfig,
 )
@@ -118,7 +118,7 @@ class BaseModelMerger(ABC):
             # Try to infer from model_type if architectures is missing
             model_type = getattr(self.model_config, 'model_type', '').lower()
             if 'vision' in model_type or 'vl' in model_type:
-                return AutoModelForVision2Seq
+                return AutoModelForImageTextToText 
             elif 'causal' in model_type or 'gpt' in model_type or 'llama' in model_type or 'qwen' in model_type:
                 return AutoModelForCausalLM
             else:
@@ -132,7 +132,7 @@ class BaseModelMerger(ABC):
         elif "ForCausalLM" in architecture:
             return AutoModelForCausalLM
         elif "ForConditionalGeneration" in architecture:
-            return AutoModelForVision2Seq
+            return AutoModelForImageTextToText 
 
         raise NotImplementedError(f"Unknown architecture {self.model_config.architectures}")
 

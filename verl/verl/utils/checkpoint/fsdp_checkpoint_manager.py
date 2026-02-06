@@ -325,10 +325,10 @@ class FSDPCheckpointManager(BaseCheckpointManager):
 
                         auto_model_cls = AutoModelForImageTextToText
                     else:
-                        # transformers < 4.54.0 uses AutoModelForVision2Seq
-                        from transformers import AutoModelForVision2Seq
+                        # transformers < 4.54.0 uses AutoModelForImageTextToText
+                        from transformers import AutoModelForImageTextToText
 
-                        auto_model_cls = AutoModelForVision2Seq
+                        auto_model_cls = AutoModelForImageTextToText
                 else:
                     raise NotImplementedError(f"Unknown architecture {model_config['architectures']}")
 

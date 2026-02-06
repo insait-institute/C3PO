@@ -8,6 +8,7 @@ data:
   micro_batch_size_per_gpu: 4  # this is also val batch size
   train_files: ~/data/gsm8k/train.parquet
   val_files: ~/data/gsm8k/test.parquet
+  tokenizer_path: null
   train_max_samples: -1  # set to -1 to use full dataset
   val_max_samples: -1  # set to -1 to use full dataset
   # Single-turn settings
@@ -34,7 +35,7 @@ model:
   partial_pretrain: ~/models/gemma-1.1-7b-it
   use_shm: False
   fsdp_config:
-    model_dtype: fp32
+    model_dtype: bfloat16
     wrap_policy:
       min_num_params: 0
     cpu_offload: False
