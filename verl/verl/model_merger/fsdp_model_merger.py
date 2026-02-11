@@ -54,12 +54,7 @@ class FSDPModelMerger(BaseModelMerger):
     Example:
         To merge FSDP checkpoints:
         ```python
-        config = ModelMergerConfig(
-            operation="merge",
-            backend="fsdp",
-            local_dir="path/to/fsdp/checkpoints",
-            target_dir="path/to/output"
-        )
+        config = ModelMergerConfig(operation="merge", backend="fsdp", local_dir="path/to/fsdp/checkpoints", target_dir="path/to/output")
         merger = FSDPModelMerger(config)
         merger.merge_and_save()
         ```
@@ -113,9 +108,7 @@ class FSDPModelMerger(BaseModelMerger):
 
         return mesh, mesh_dim_names
 
-    def _calculate_shard_configuration(
-        self, mesh: np.ndarray, mesh_dim_names: tuple[str, ...]
-    ) -> tuple[int, tuple[int, ...]]:
+    def _calculate_shard_configuration(self, mesh: np.ndarray, mesh_dim_names: tuple[str, ...]) -> tuple[int, tuple[int, ...]]:
         """Calculates the total number of shards and the shape of the device mesh."""
         assert mesh_dim_names in (("fsdp",), ("ddp", "fsdp")), f"Unsupported mesh_dim_names {mesh_dim_names}"
 
@@ -141,23 +134,26 @@ class FSDPModelMerger(BaseModelMerger):
         raise NotImplementedError(f"Unsupported placement: {placement}")
 
     def _load_and_merge_state_dicts(
-        self, world_size: int, total_shards: int, mesh_shape: tuple[int, ...], mesh_dim_names: tuple[str, ...]
+        self, world_size: int, total_shards: int, mesh_shape: tuple[int, ...], mesh_dim_names: tuple[str, ...], merge_optim=False
     ) -> dict[str, torch.Tensor]:
         model_state_dict_lst = [None] * total_shards
+        optimizer_state_dict_lst = [None] * total_shards
 
-        def process_one_shard(rank: int, model_state_dict_lst: list):
+        def process_one_shard(rank: int, model_state_dict_lst: list, optimizer_state_dict_lst: list):
             model_path = Path(self.config.local_dir) / f"model_world_size_{world_size}_rank_{rank}.pt"
-            state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
-            model_state_dict_lst[rank] = state_dict
-            return state_dict
+            optimizer_path = Path(self.config.local_dir) / f"optim_world_size_{world_size}_rank_{rank}.pt"
+            model_state_dict_lst[rank] = torch.load(model_path, map_location="cpu", weights_only=False)
+            if merge_optim:
+                optimizer_state_dict_lst[rank] = torch.load(optimizer_path, map_location="cpu", weights_only=False)
+            return model_state_dict_lst[rank], optimizer_state_dict_lst[rank]
 
         with ThreadPoolExecutor(max_workers=min(32, os.cpu_count())) as executor:
-            futures = [executor.submit(process_one_shard, rank, model_state_dict_lst) for rank in range(total_shards)]
+            futures = [executor.submit(process_one_shard, rank, model_state_dict_lst, optimizer_state_dict_lst) for rank in range(total_shards)]
             for future in tqdm(futures, desc=f"Loading {total_shards} FSDP shards", total=total_shards):
                 future.result()
 
         # Merge state dicts from all shards
-        state_dict = {}
+        state_dict, optim_state_dict = {}, {}
         param_placements: dict[str, list] = {}
 
         for key in set(model_state_dict_lst[0].keys()):
@@ -201,26 +197,34 @@ class FSDPModelMerger(BaseModelMerger):
             else:
                 state_dict[key] = torch.cat(state_dict[key], dim=0)
 
-        return state_dict
+        if merge_optim:
+            # Only implemented for IVON.
+            optim_state_dict = {"state": optimizer_state_dict_lst[0]["state"], "param_groups": optimizer_state_dict_lst[0]["param_groups"]}
+            for key in optimizer_state_dict_lst[0]["param_groups"][0].keys():
+                if key in ["momentum", "hess"]:
+                    optim_state_dict["param_groups"][0][key] = torch.cat([optimizer_state_dict_lst[rank]["param_groups"][0][key] for rank in range(total_shards)], dim=0)
+                elif key in ["numel", "local_numel"]:
+                    optim_state_dict["param_groups"][0][key] = sum([optimizer_state_dict_lst[rank]["param_groups"][0][key] for rank in range(total_shards)])
+        return state_dict, optim_state_dict
 
     def merge_and_save(self):
         world_size = self._get_world_size()
         rank_zero_state_dict = self._load_rank_zero_state_dict(world_size)
-
+        print(f"Rank zero state dict keys: {list(rank_zero_state_dict.keys())}")
         mesh, mesh_dim_names = self._extract_device_mesh_info(rank_zero_state_dict, world_size)
         print(f"Got device mesh {mesh}, mesh_dim_names {mesh_dim_names}")
 
         total_shards, mesh_shape = self._calculate_shard_configuration(mesh, mesh_dim_names)
         print(f"Processing model shards with {total_shards} {mesh_shape} in total")
 
-        merged_state_dict = self._load_and_merge_state_dicts(world_size, total_shards, mesh_shape, mesh_dim_names)
+        merged_state_dict, merged_optimizer_state_dict = self._load_and_merge_state_dicts(world_size, total_shards, mesh_shape, mesh_dim_names, merge_optim=self.config.merge_optim)
 
         if self.config.operation == "test":
             if not self.config.test_hf_dir:
                 raise ValueError("test_hf_dir must be provided for test operation")
             self._validate_state_dict(merged_state_dict)
         elif self.config.operation == "merge":
-            self.save_hf_model_and_tokenizer(merged_state_dict)
+            self.save_hf_model_and_tokenizer(merged_state_dict, merged_optimizer_state_dict)
             if self.config.hf_upload:
                 self.upload_to_huggingface()
         else:
@@ -245,15 +249,11 @@ class FSDPModelMerger(BaseModelMerger):
         for key in hf_model_keys:
             hf_shape = hf_state_dict[key].shape
             collected_shape = state_dict[key].shape
-            assert hf_shape == collected_shape, (
-                f"Shape mismatch for key '{key}': original {hf_shape} vs collected {collected_shape}"
-            )
+            assert hf_shape == collected_shape, f"Shape mismatch for key '{key}': original {hf_shape} vs collected {collected_shape}"
 
             hf_dtype = hf_state_dict[key].dtype
             collected_dtype = state_dict[key].dtype
-            assert hf_dtype == collected_dtype, (
-                f"Dtype mismatch for key '{key}': original {hf_dtype} vs collected {collected_dtype}"
-            )
+            assert hf_dtype == collected_dtype, f"Dtype mismatch for key '{key}': original {hf_dtype} vs collected {collected_dtype}"
 
             torch.testing.assert_close(hf_state_dict[key], state_dict[key], atol=1e-6, rtol=1e-6)
 
