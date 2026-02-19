@@ -81,18 +81,11 @@ def run_ppo(config, task_runner_class=None) -> None:
 
     # Create a remote instance of the TaskRunner class, and
     # Execute the `run` method of the TaskRunner instance remotely and wait for it to complete
-    if (
-        is_cuda_available
-        and config.global_profiler.tool == "nsys"
-        and config.global_profiler.get("steps") is not None
-        and len(config.global_profiler.get("steps", [])) > 0
-    ):
+    if is_cuda_available and config.global_profiler.tool == "nsys" and config.global_profiler.get("steps") is not None and len(config.global_profiler.get("steps", [])) > 0:
         from verl.utils.import_utils import is_nvtx_available
 
         assert is_nvtx_available(), "nvtx is not available in CUDA platform. Please 'pip3 install nvtx'"
-        nsight_options = OmegaConf.to_container(
-            config.global_profiler.global_tool_config.nsys.controller_nsight_options
-        )
+        nsight_options = OmegaConf.to_container(config.global_profiler.global_tool_config.nsys.controller_nsight_options)
         runner = task_runner_class.options(runtime_env={"nsight": nsight_options}).remote()
     else:
         runner = task_runner_class.remote()
@@ -302,9 +295,7 @@ class TaskRunner:
 
         # Download the checkpoint from HDFS to the local machine.
         # `use_shm` determines whether to use shared memory, which could lead to faster model loading if turned on
-        local_path = copy_to_local(
-            config.actor_rollout_ref.model.path, use_shm=config.actor_rollout_ref.model.get("use_shm", False)
-        )
+        local_path = copy_to_local(config.actor_rollout_ref.model.path, use_shm=config.actor_rollout_ref.model.get("use_shm", False))
 
         # Instantiate the tokenizer and processor.
         from verl.utils import hf_processor, hf_tokenizer
@@ -316,17 +307,10 @@ class TaskRunner:
 
         use_reward_loop = config.reward_model.use_reward_loop
         if not use_reward_loop:
-            print(
-                "WARNING: Init reward manager in single controller will be deprecated. "
-                "Please set config.reward_model.use_reward_loop to use distributed reward manager."
-            )
+            print("WARNING: Init reward manager in single controller will be deprecated. Please set config.reward_model.use_reward_loop to use distributed reward manager.")
             # Load the reward manager for training and validation.
-            reward_fn = load_reward_manager(
-                config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {})
-            )
-            val_reward_fn = load_reward_manager(
-                config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {})
-            )
+            reward_fn = load_reward_manager(config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {}))
+            val_reward_fn = load_reward_manager(config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {}))
         else:
             # reward_loop will use init a reward loop manager in ray_trainer
             # and use it to compute reward score
@@ -355,7 +339,6 @@ class TaskRunner:
             max_samples=config.data.get("val_max_samples", -1),
         )
         train_sampler = create_rl_sampler(config.data, train_dataset)
-
         # Initialize the PPO trainer.
         trainer = RayPPOTrainer(
             config=config,
@@ -373,7 +356,6 @@ class TaskRunner:
         )
         # Initialize the workers of the trainer.
         trainer.init_workers()
-
         # Start the training process.
         trainer.fit()
 

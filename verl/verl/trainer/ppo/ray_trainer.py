@@ -89,9 +89,7 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
 
     # compute kl between ref_policy and current policy
     # When apply_kl_penalty, algorithm.use_kl_in_reward=True, so the reference model has been enabled.
-    kld = core_algos.kl_penalty(
-        data.batch["old_log_probs"], data.batch["ref_log_prob"], kl_penalty=kl_penalty
-    )  # (batch_size, response_length)
+    kld = core_algos.kl_penalty(data.batch["old_log_probs"], data.batch["ref_log_prob"], kl_penalty=kl_penalty)  # (batch_size, response_length)
     kld = kld * response_mask
     beta = kl_ctrl.value
 
@@ -203,10 +201,7 @@ def compute_advantage(
         # Add sum_pi_squared for Optimal Token Baseline
         if adv_estimator in (AdvantageEstimator.OPTIMAL_TOKEN_BASELINE, AdvantageEstimator.TIR_OPTIMAL_TOKEN_BASELINE):
             # Check if sum_pi_squared is available
-            assert "sum_pi_squared" in data.batch, (
-                "Step-dependent optimal baseline requires sum_pi_squared from actor. "
-                "Please set actor.calculate_sum_pi_squared=True in config."
-            )
+            assert "sum_pi_squared" in data.batch, "Step-dependent optimal baseline requires sum_pi_squared from actor. Please set actor.calculate_sum_pi_squared=True in config."
             adv_kwargs["sum_pi_squared"] = data.batch["sum_pi_squared"]
             # Get pre-computed rollout IS weights if available
             rollout_is_weights = data.batch.get("rollout_is_weights", None)
@@ -276,9 +271,7 @@ class RayPPOTrainer:
         assert self.hybrid_engine, "Currently, only support hybrid engine"
 
         if self.hybrid_engine:
-            assert Role.ActorRollout in role_worker_mapping or Role.ActorRolloutRef in role_worker_mapping, (
-                f"{role_worker_mapping.keys()=}"
-            )
+            assert Role.ActorRollout in role_worker_mapping or Role.ActorRolloutRef in role_worker_mapping, f"{role_worker_mapping.keys()=}"
 
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
@@ -370,10 +363,7 @@ class RayPPOTrainer:
         assert len(self.train_dataloader) >= 1, "Train dataloader is empty!"
         assert len(self.val_dataloader) >= 1, "Validation dataloader is empty!"
 
-        print(
-            f"Size of train dataloader: {len(self.train_dataloader)}, Size of val dataloader: "
-            f"{len(self.val_dataloader)}"
-        )
+        print(f"Size of train dataloader: {len(self.train_dataloader)}, Size of val dataloader: {len(self.val_dataloader)}")
 
         total_training_steps = len(self.train_dataloader) * self.config.trainer.total_epochs
 
@@ -421,9 +411,7 @@ class RayPPOTrainer:
 
         print(f"Dumped generations to {filename}")
 
-    def _log_rollout_data(
-        self, batch: DataProto, reward_extra_infos_dict: dict, timing_raw: dict, rollout_data_dir: str
-    ):
+    def _log_rollout_data(self, batch: DataProto, reward_extra_infos_dict: dict, timing_raw: dict, rollout_data_dir: str):
         """Log rollout data to disk.
         Args:
             batch (DataProto): The batch containing rollout data
@@ -560,14 +548,10 @@ class RayPPOTrainer:
             test_batch = DataProto.from_single_dict(test_data)
 
             if "uid" not in test_batch.non_tensor_batch:
-                test_batch.non_tensor_batch["uid"] = np.array(
-                    [str(uuid.uuid4()) for _ in range(len(test_batch.batch))], dtype=object
-                )
+                test_batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(test_batch.batch))], dtype=object)
 
             # repeat test batch
-            test_batch = test_batch.repeat(
-                repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=True
-            )
+            test_batch = test_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=True)
 
             # The invocation of the reward function is agnostic to whether a reward model is used.
             # Decisions about when (e.g., training vs. validation) and whether to invoke the reward model
@@ -575,9 +559,7 @@ class RayPPOTrainer:
             # if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
             #     return {}
 
-            ground_truths = [
-                item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None) for item in test_batch
-            ]
+            ground_truths = [item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None) for item in test_batch]
             sample_gts.extend(ground_truths)
 
             test_gen_batch = self._get_gen_batch(test_batch)
@@ -592,11 +574,7 @@ class RayPPOTrainer:
             print(f"test_gen_batch meta info: {test_gen_batch.meta_info}")
 
             # pad to be divisible by dp_size
-            size_divisor = (
-                self.actor_rollout_wg.world_size
-                if not self.async_rollout_mode
-                else self.config.actor_rollout_ref.rollout.agent.num_workers
-            )
+            size_divisor = self.actor_rollout_wg.world_size if not self.async_rollout_mode else self.config.actor_rollout_ref.rollout.agent.num_workers
             test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, size_divisor)
             if not self.async_rollout_mode:
                 test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
@@ -635,9 +613,7 @@ class RayPPOTrainer:
 
             # evaluate using reward_function
             if not self.use_reward_loop:
-                reward_tensor, reward_extra_info = self._compute_reward_legacy(
-                    test_batch, reward_fn=self.val_reward_fn, reward_for_val=True
-                )
+                reward_tensor, reward_extra_info = self._compute_reward_legacy(test_batch, reward_fn=self.val_reward_fn, reward_for_val=True)
             else:
                 reward_tensor = test_batch.batch["rm_scores"]
                 reward_extra_keys = test_batch.meta_info.get("reward_extra_keys", [])
@@ -697,11 +673,7 @@ class RayPPOTrainer:
             for var_name, metric2val in var2metric2val.items():
                 n_max = max([int(name.split("@")[-1].split("/")[0]) for name in metric2val.keys()])
                 for metric_name, metric_val in metric2val.items():
-                    if (
-                        (var_name == core_var)
-                        and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best"])
-                        and (f"@{n_max}" in metric_name)
-                    ):
+                    if (var_name == core_var) and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best"]) and (f"@{n_max}" in metric_name):
                         metric_sec = "val-core"
                     else:
                         metric_sec = "val-aux"
@@ -821,13 +793,10 @@ class RayPPOTrainer:
             wg_kwargs["profile_steps"] = OmegaConf.select(self.config.global_profiler, "steps")
             # Only require nsight worker options when tool is nsys
             if OmegaConf.select(self.config.global_profiler, "tool") == "nsys":
-                assert (
-                    OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
-                    is not None
-                ), "worker_nsight_options must be set when using nsys with profile_steps"
-                wg_kwargs["worker_nsight_options"] = OmegaConf.to_container(
-                    OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
+                assert OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options") is not None, (
+                    "worker_nsight_options must be set when using nsys with profile_steps"
                 )
+                wg_kwargs["worker_nsight_options"] = OmegaConf.to_container(OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options"))
         wg_kwargs["device_name"] = self.device_name
 
         for resource_pool, class_dict in self.resource_pool_to_cls.items():
@@ -903,9 +872,7 @@ class RayPPOTrainer:
         # infrastructure overview: https://verl.readthedocs.io/en/latest/advance/reward_loop.html#architecture-design
         # agent_reward_loop: streaming reward computation with actor rollout
         # two conditions satisfied: (1) no reward model, or (2) reward model with extra resource pool
-        enable_agent_reward_loop = self.use_reward_loop and (
-            not self.use_rm or self.config.reward_model.enable_resource_pool
-        )
+        enable_agent_reward_loop = self.use_reward_loop and (not self.use_rm or self.config.reward_model.enable_resource_pool)
         # if enable_agent_reward_loop, we directly pass reward_loop_workers to agent loop manager
         # to stream reward computation with actor rollout
 
@@ -930,48 +897,29 @@ class RayPPOTrainer:
         from verl.utils.fs import local_mkdir_safe
 
         # path: given_path + `/global_step_{global_steps}` + `/actor`
-        local_global_step_folder = os.path.join(
-            self.config.trainer.default_local_dir, f"global_step_{self.global_steps}"
-        )
+        local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}")
 
         print(f"local_global_step_folder: {local_global_step_folder}")
         actor_local_path = os.path.join(local_global_step_folder, "actor")
 
         actor_remote_path = (
-            None
-            if self.config.trainer.default_hdfs_dir is None
-            else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "actor")
+            None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "actor")
         )
 
         remove_previous_ckpt_in_save = self.config.trainer.get("remove_previous_ckpt_in_save", False)
         if remove_previous_ckpt_in_save:
-            print(
-                "Warning: remove_previous_ckpt_in_save is deprecated,"
-                + " set max_actor_ckpt_to_keep=1 and max_critic_ckpt_to_keep=1 instead"
-            )
-        max_actor_ckpt_to_keep = (
-            self.config.trainer.get("max_actor_ckpt_to_keep", None) if not remove_previous_ckpt_in_save else 1
-        )
-        max_critic_ckpt_to_keep = (
-            self.config.trainer.get("max_critic_ckpt_to_keep", None) if not remove_previous_ckpt_in_save else 1
-        )
+            print("Warning: remove_previous_ckpt_in_save is deprecated," + " set max_actor_ckpt_to_keep=1 and max_critic_ckpt_to_keep=1 instead")
+        max_actor_ckpt_to_keep = self.config.trainer.get("max_actor_ckpt_to_keep", None) if not remove_previous_ckpt_in_save else 1
+        max_critic_ckpt_to_keep = self.config.trainer.get("max_critic_ckpt_to_keep", None) if not remove_previous_ckpt_in_save else 1
 
-        self.actor_rollout_wg.save_checkpoint(
-            actor_local_path, actor_remote_path, self.global_steps, max_ckpt_to_keep=max_actor_ckpt_to_keep
-        )
+        self.actor_rollout_wg.save_checkpoint(actor_local_path, actor_remote_path, self.global_steps, max_ckpt_to_keep=max_actor_ckpt_to_keep)
 
         if self.use_critic:
             critic_local_path = os.path.join(local_global_step_folder, str(Role.Critic))
             critic_remote_path = (
-                None
-                if self.config.trainer.default_hdfs_dir is None
-                else os.path.join(
-                    self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", str(Role.Critic)
-                )
+                None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", str(Role.Critic))
             )
-            self.critic_wg.save_checkpoint(
-                critic_local_path, critic_remote_path, self.global_steps, max_ckpt_to_keep=max_critic_ckpt_to_keep
-            )
+            self.critic_wg.save_checkpoint(critic_local_path, critic_remote_path, self.global_steps, max_ckpt_to_keep=max_critic_ckpt_to_keep)
 
         # save dataloader
         local_mkdir_safe(local_global_step_folder)
@@ -980,18 +928,12 @@ class RayPPOTrainer:
         torch.save(dataloader_state_dict, dataloader_local_path)
 
         # latest checkpointed iteration tracker (for atomic usage)
-        if (
-            hasattr(self.config.actor_rollout_ref.actor.checkpoint, "async_save")
-            and self.config.actor_rollout_ref.actor.checkpoint.async_save
-        ) or (
-            "async_save" in self.config.actor_rollout_ref.actor.checkpoint
-            and self.config.actor_rollout_ref.actor.checkpoint["async_save"]
+        if (hasattr(self.config.actor_rollout_ref.actor.checkpoint, "async_save") and self.config.actor_rollout_ref.actor.checkpoint.async_save) or (
+            "async_save" in self.config.actor_rollout_ref.actor.checkpoint and self.config.actor_rollout_ref.actor.checkpoint["async_save"]
         ):
             print("skip write latest_checkpointed_iteration.txt when async_save is True")
             return
-        local_latest_checkpointed_iteration = os.path.join(
-            self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt"
-        )
+        local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
         with open(local_latest_checkpointed_iteration, "w") as f:
             f.write(str(self.global_steps))
 
@@ -1017,9 +959,7 @@ class RayPPOTrainer:
         else:
             if self.config.trainer.resume_mode == "resume_path":
                 assert isinstance(self.config.trainer.resume_from_path, str), "resume ckpt must be str type"
-                assert "global_step_" in self.config.trainer.resume_from_path, (
-                    "resume ckpt must specify the global_steps"
-                )
+                assert "global_step_" in self.config.trainer.resume_from_path, "resume ckpt must specify the global_steps"
                 global_step_folder = self.config.trainer.resume_from_path
                 if not os.path.isabs(global_step_folder):
                     working_dir = os.getcwd()
@@ -1034,14 +974,10 @@ class RayPPOTrainer:
         actor_path = os.path.join(global_step_folder, "actor")
         critic_path = os.path.join(global_step_folder, str(Role.Critic))
         # load actor
-        self.actor_rollout_wg.load_checkpoint(
-            actor_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load
-        )
+        self.actor_rollout_wg.load_checkpoint(actor_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
         # load critic
         if self.use_critic:
-            self.critic_wg.load_checkpoint(
-                critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load
-            )
+            self.critic_wg.load_checkpoint(critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
 
         # load dataloader,
         # TODO: from remote not implemented yet
@@ -1159,9 +1095,7 @@ class RayPPOTrainer:
         # reorder based on index. The data will be automatically equally partitioned by dispatch function
         global_idx = torch.tensor([j for partition in global_partition_lst for j in partition])
         batch.reorder(global_idx)
-        global_balance_stats = log_seqlen_unbalance(
-            seqlen_list=global_seqlen_lst.tolist(), partitions=global_partition_lst, prefix=logging_prefix
-        )
+        global_balance_stats = log_seqlen_unbalance(seqlen_list=global_seqlen_lst.tolist(), partitions=global_partition_lst, prefix=logging_prefix)
         metrics.update(global_balance_stats)
 
     def _compute_values(self, batch: DataProto) -> DataProto:
@@ -1322,7 +1256,7 @@ class RayPPOTrainer:
 
         # load checkpoint and update weights before doing anything
         self._load_checkpoint()
-        self.checkpoint_manager.update_weights()
+        # self.checkpoint_manager.update_weights()
 
         current_epoch = self.global_steps // len(self.train_dataloader)
 
@@ -1349,11 +1283,7 @@ class RayPPOTrainer:
         self.max_steps_duration = 0
 
         prev_step_profile = False
-        curr_step_profile = (
-            self.global_steps in self.config.global_profiler.steps
-            if self.config.global_profiler.steps is not None
-            else False
-        )
+        curr_step_profile = self.global_steps in self.config.global_profiler.steps if self.config.global_profiler.steps is not None else False
         next_step_profile = False
 
         for epoch in range(current_epoch, self.config.trainer.total_epochs):
@@ -1364,26 +1294,27 @@ class RayPPOTrainer:
                 timing_raw = {}
 
                 with marked_timer("start_profile", timing_raw):
-                    self._start_profiling(
-                        not prev_step_profile and curr_step_profile
-                        if self.config.global_profiler.profile_continuous_steps
-                        else curr_step_profile
-                    )
+                    self._start_profiling(not prev_step_profile and curr_step_profile if self.config.global_profiler.profile_continuous_steps else curr_step_profile)
+
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
                 batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
 
+                # If IVON, add the noise to the actor parameters and sync weights
+                if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
+                    with marked_timer("noise_actor", timing_raw, color="red"):
+                        self.actor_rollout_wg.noise_actor()
+
+                with marked_timer("update_weights", timing_raw, color="red"):
+                    self.checkpoint_manager.update_weights()
+
                 # add uid to batch
-                batch.non_tensor_batch["uid"] = np.array(
-                    [str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object
-                )
+                batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
 
                 gen_batch = self._get_gen_batch(batch)
 
                 # pass global_steps to trace
                 gen_batch.meta_info["global_steps"] = self.global_steps
-                gen_batch_output = gen_batch.repeat(
-                    repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True
-                )
+                gen_batch_output = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
 
                 is_last_step = self.global_steps >= self.total_training_steps
                 with marked_timer("step", timing_raw):
@@ -1424,9 +1355,7 @@ class RayPPOTrainer:
 
                             # Compute or extract reward for REMAX baseline
                             if not self.use_reward_loop:
-                                reward_baseline_tensor = self._compute_reward_legacy(
-                                    batch, reward_fn=self.reward_fn, sum_reward=True
-                                )
+                                reward_baseline_tensor = self._compute_reward_legacy(batch, reward_fn=self.reward_fn, sum_reward=True)
                             else:
                                 reward_baseline_tensor = batch.batch["rm_scores"].sum(dim=-1)
 
@@ -1469,13 +1398,9 @@ class RayPPOTrainer:
                         # Compute or extract reward_tensor and reward_extra_infos_dict for training
                         if not self.use_reward_loop:
                             if self.config.reward_model.launch_reward_fn_async:
-                                future_reward = compute_reward_async.remote(
-                                    data=batch, config=self.config, tokenizer=self.tokenizer
-                                )
+                                future_reward = compute_reward_async.remote(data=batch, config=self.config, tokenizer=self.tokenizer)
                             else:
-                                reward_tensor, reward_extra_infos_dict = self._compute_reward_legacy(
-                                    batch, reward_fn=self.reward_fn, reward_for_val=False
-                                )
+                                reward_tensor, reward_extra_infos_dict = self._compute_reward_legacy(batch, reward_fn=self.reward_fn, reward_for_val=False)
                         else:
                             reward_tensor = batch.batch["rm_scores"]
                             reward_extra_keys = batch.meta_info.get("reward_extra_keys", [])
@@ -1514,9 +1439,7 @@ class RayPPOTrainer:
                             metrics.update(old_log_prob_metrics)
                             old_log_prob.batch.pop("entropys")
                             if "routed_experts" in batch.batch and "routed_experts" in old_log_prob.batch:
-                                router_mode = getattr(
-                                    self.config.actor_rollout_ref.actor.router_replay, "mode", "disabled"
-                                )
+                                router_mode = getattr(self.config.actor_rollout_ref.actor.router_replay, "mode", "disabled")
                                 if router_mode == "R2":
                                     batch.batch.pop("routed_experts")
                                 else:
@@ -1554,9 +1477,7 @@ class RayPPOTrainer:
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
-                            batch, kl_metrics = apply_kl_penalty(
-                                batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty
-                            )
+                            batch, kl_metrics = apply_kl_penalty(batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty)
                             metrics.update(kl_metrics)
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
@@ -1565,9 +1486,7 @@ class RayPPOTrainer:
                         # Only runs in decoupled mode (computes once per batch using stable π_old)
                         # In bypass mode, this is skipped - actor computes metrics from evolving π_θ vs π_rollout
                         if (
-                            rollout_corr_config is not None
-                            and "rollout_log_probs" in batch.batch
-                            and not bypass_recomputing_logprobs  # Only in decoupled mode
+                            rollout_corr_config is not None and "rollout_log_probs" in batch.batch and not bypass_recomputing_logprobs  # Only in decoupled mode
                         ):
                             from verl.trainer.ppo.rollout_corr_helper import compute_rollout_correction_and_add_to_batch
 
@@ -1577,9 +1496,7 @@ class RayPPOTrainer:
                             metrics.update(is_metrics)
 
                         # compute advantages, executed on the driver process
-                        norm_adv_by_std_in_grpo = self.config.algorithm.get(
-                            "norm_adv_by_std_in_grpo", True
-                        )  # GRPO adv normalization factor
+                        norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO adv normalization factor
 
                         batch = compute_advantage(
                             batch,
@@ -1616,19 +1533,11 @@ class RayPPOTrainer:
                         # 2. It's the last training step.
                         # 3. The current step number is a multiple of the save frequency.
                         # 4. The ESI(Elastic Server Instance)/training plan is close to expiration.
-                        if self.config.trainer.save_freq > 0 and (
-                            is_last_step
-                            or self.global_steps % self.config.trainer.save_freq == 0
-                            or esi_close_to_expiration
-                        ):
+                        if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0 or esi_close_to_expiration):
                             if esi_close_to_expiration:
                                 print("Force saving checkpoint: ESI instance expiration approaching.")
                             with marked_timer("save_checkpoint", timing_raw, color="green"):
                                 self._save_checkpoint()
-
-                        # update weights from trainer to rollout
-                        with marked_timer("update_weights", timing_raw, color="red"):
-                            self.checkpoint_manager.update_weights()
 
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
@@ -1639,9 +1548,7 @@ class RayPPOTrainer:
                         self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_dir)
 
                 # validate
-                if self.config.trainer.test_freq > 0 and (
-                    is_last_step or self.global_steps % self.config.trainer.test_freq == 0
-                ):
+                if self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
                     with marked_timer("testing", timing_raw, color="green"):
                         val_metrics: dict = self._validate()
                         if is_last_step:
@@ -1649,16 +1556,8 @@ class RayPPOTrainer:
                     metrics.update(val_metrics)
 
                 with marked_timer("stop_profile", timing_raw):
-                    next_step_profile = (
-                        self.global_steps + 1 in self.config.global_profiler.steps
-                        if self.config.global_profiler.steps is not None
-                        else False
-                    )
-                    self._stop_profiling(
-                        curr_step_profile and not next_step_profile
-                        if self.config.global_profiler.profile_continuous_steps
-                        else curr_step_profile
-                    )
+                    next_step_profile = self.global_steps + 1 in self.config.global_profiler.steps if self.config.global_profiler.steps is not None else False
+                    self._stop_profiling(curr_step_profile and not next_step_profile if self.config.global_profiler.profile_continuous_steps else curr_step_profile)
                     prev_step_profile = curr_step_profile
                     curr_step_profile = next_step_profile
 
@@ -1693,13 +1592,8 @@ class RayPPOTrainer:
                 progress_bar.update(1)
                 self.global_steps += 1
 
-                if (
-                    hasattr(self.config.actor_rollout_ref.actor, "profiler")
-                    and self.config.actor_rollout_ref.actor.profiler.tool == "torch_memory"
-                ):
-                    self.actor_rollout_wg.dump_memory_snapshot(
-                        tag=f"post_update_step{self.global_steps}", sub_dir=f"step{self.global_steps}"
-                    )
+                if hasattr(self.config.actor_rollout_ref.actor, "profiler") and self.config.actor_rollout_ref.actor.profiler.tool == "torch_memory":
+                    self.actor_rollout_wg.dump_memory_snapshot(tag=f"post_update_step{self.global_steps}", sub_dir=f"step{self.global_steps}")
 
                 if is_last_step:
                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):

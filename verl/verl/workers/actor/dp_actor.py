@@ -106,13 +106,10 @@ class DataParallelPPOActor(BasePPOActor):
                 else verl_F.calculate_sum_pi_squared_from_logits
             )
             assert not (self.use_fused_kernels or self.use_prefix_grouper), (
-                "calculate_sum_pi_squared is not supported with "
-                f"{self.use_fused_kernels=} or {self.use_prefix_grouper=} for now."
+                f"calculate_sum_pi_squared is not supported with {self.use_fused_kernels=} or {self.use_prefix_grouper=} for now."
             )
 
-    def _forward_micro_batch(
-        self, micro_batch: dict[str, torch.Tensor], temperature: float, calculate_entropy: bool = False
-    ) -> dict[str, torch.Tensor]:
+    def _forward_micro_batch(self, micro_batch: dict[str, torch.Tensor], temperature: float, calculate_entropy: bool = False) -> dict[str, torch.Tensor]:
         """
         Returns:
             dict[str, torch.Tensor]:
@@ -126,12 +123,7 @@ class DataParallelPPOActor(BasePPOActor):
         sum_pi_squared_checkpointing = self.config.get("sum_pi_squared_checkpointing", False)
         # PrefixGrouper path for shared-prefix optimization
         if self.use_prefix_grouper:
-            can_use_pg = (
-                not self.use_remove_padding
-                and not self.use_ulysses_sp
-                and not self.use_fused_kernels
-                and not self.use_dynamic_bsz
-            )
+            can_use_pg = not self.use_remove_padding and not self.use_ulysses_sp and not self.use_fused_kernels and not self.use_dynamic_bsz
             if can_use_pg and "response_mask" in micro_batch and "uid" in micro_batch:
                 from verl.trainer.ppo.prefix_grouper_utils import forward_micro_batch_with_prefix_grouper
 
@@ -162,22 +154,16 @@ class DataParallelPPOActor(BasePPOActor):
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 4, seqlen) -> (4, bsz, seqlen)
 
             if self.use_remove_padding:
-                input_ids_rmpad, indices, cu_seqlens, *_ = unpad_input(
-                    input_ids.unsqueeze(-1), attention_mask
-                )  # input_ids_rmpad (total_nnz, ...)
+                input_ids_rmpad, indices, cu_seqlens, *_ = unpad_input(input_ids.unsqueeze(-1), attention_mask)  # input_ids_rmpad (total_nnz, ...)
                 input_ids_rmpad = input_ids_rmpad.transpose(0, 1)  # (1, total_nnz)
 
                 # unpad the position_ids to align the rotary
                 if position_ids.dim() == 3:
                     position_ids_rmpad = (
-                        index_first_axis(rearrange(position_ids, "c b s ... -> (b s) c ..."), indices)
-                        .transpose(0, 1)
-                        .unsqueeze(1)
+                        index_first_axis(rearrange(position_ids, "c b s ... -> (b s) c ..."), indices).transpose(0, 1).unsqueeze(1)
                     )  # (4, bsz, seqlen) -> (4, 1, bsz * seqlen)
                 else:
-                    position_ids_rmpad = index_first_axis(
-                        rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices
-                    ).transpose(0, 1)
+                    position_ids_rmpad = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1)
 
                 is_mask_all_zero = attention_mask.sum() == 0
                 if is_mask_all_zero:
@@ -202,18 +188,14 @@ class DataParallelPPOActor(BasePPOActor):
                 if "image_bound" in multi_modal_inputs:
                     from verl.utils.dataset.vision_utils import process_multi_modal_inputs_for_minicpmo
 
-                    multi_modal_inputs = process_multi_modal_inputs_for_minicpmo(
-                        input_ids, attention_mask, position_ids, cu_seqlens, multi_modal_inputs
-                    )
+                    multi_modal_inputs = process_multi_modal_inputs_for_minicpmo(input_ids, attention_mask, position_ids, cu_seqlens, multi_modal_inputs)
 
                 # for compute the log_prob
                 input_ids_rmpad_rolled = torch.roll(input_ids_rmpad, shifts=-1, dims=1)  # (1, total_nnz)
 
                 # pad and slice the inputs if sp > 1
                 if self.use_ulysses_sp:
-                    is_vlm_model = hasattr(
-                        getattr(self.actor_module, "module", self.actor_module).config, "vision_config"
-                    )
+                    is_vlm_model = hasattr(getattr(self.actor_module, "module", self.actor_module).config, "vision_config")
                     if is_vlm_model:
                         # vlm model's inputs will be sliced after embedding
                         input_ids_rmpad, position_ids_rmpad, pad_size = ulysses_pad(
@@ -282,9 +264,7 @@ class DataParallelPPOActor(BasePPOActor):
                         sum_pi_squared_rmpad = (
                             self.calculate_sum_pi_squared_from_logits(logits_rmpad)
                             if not sum_pi_squared_checkpointing
-                            else torch.utils.checkpoint.checkpoint(
-                                self.calculate_sum_pi_squared_from_logits, logits_rmpad
-                            )
+                            else torch.utils.checkpoint.checkpoint(self.calculate_sum_pi_squared_from_logits, logits_rmpad)
                         )
 
                 # gather log_prob if sp > 1
@@ -304,9 +284,7 @@ class DataParallelPPOActor(BasePPOActor):
                             padding_size=pad_size,
                         )
                     if calculate_sum_pi_squared:
-                        sum_pi_squared_rmpad = gather_outputs_and_unpad(
-                            sum_pi_squared_rmpad, gather_dim=0, unpad_dim=0, padding_size=pad_size
-                        )
+                        sum_pi_squared_rmpad = gather_outputs_and_unpad(sum_pi_squared_rmpad, gather_dim=0, unpad_dim=0, padding_size=pad_size)
 
                 if is_mask_all_zero:
                     log_probs = log_probs[:0]
@@ -469,9 +447,7 @@ class DataParallelPPOActor(BasePPOActor):
             micro_batch = micro_batch.to(get_device_id())
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch, "pad_token_id": pad_token_id}
             with torch.no_grad():
-                outputs = self._forward_micro_batch(
-                    model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
-                )
+                outputs = self._forward_micro_batch(model_inputs, temperature=temperature, calculate_entropy=calculate_entropy)
             log_probs_lst.append(outputs["log_probs"])
             if calculate_entropy:
                 entropy_lst.append(outputs["entropys"])
@@ -499,7 +475,7 @@ class DataParallelPPOActor(BasePPOActor):
         return outputs
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
-    def update_policy(self, data: DataProto):
+    def update_policy(self, data: DataProto, param_avgs=None, noise_samples=None):
         # make sure we are in training mode
         self.actor_module.train()
 
@@ -552,9 +528,7 @@ class DataParallelPPOActor(BasePPOActor):
                     max_token_len = self.config.ppo_max_token_len_per_gpu * self.ulysses_sequence_parallel_size
                     micro_batches, _ = prepare_dynamic_batch(mini_batch, max_token_len=max_token_len)
                 else:
-                    self.gradient_accumulation = (
-                        self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
-                    )
+                    self.gradient_accumulation = self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
                     micro_batches = mini_batch.split(self.config.ppo_micro_batch_size_per_gpu)
 
                 self.actor_optimizer.zero_grad()
@@ -578,9 +552,7 @@ class DataParallelPPOActor(BasePPOActor):
                         loss_scale_factor = 1 / self.gradient_accumulation
 
                     # all return: (bsz, response_length)
-                    outputs = self._forward_micro_batch(
-                        model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
-                    )
+                    outputs = self._forward_micro_batch(model_inputs, temperature=temperature, calculate_entropy=calculate_entropy)
                     log_prob = outputs["log_probs"]
                     entropy = outputs["entropys"] if calculate_entropy else None
 
@@ -640,9 +612,7 @@ class DataParallelPPOActor(BasePPOActor):
                     if self.config.use_kl_loss:
                         ref_log_prob = model_inputs["ref_log_prob"]
                         # compute kl loss
-                        kld = kl_penalty(
-                            logprob=log_prob, ref_logprob=ref_log_prob, kl_penalty=self.config.kl_loss_type
-                        )
+                        kld = kl_penalty(logprob=log_prob, ref_logprob=ref_log_prob, kl_penalty=self.config.kl_loss_type)
                         kl_loss = agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
 
                         policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
@@ -661,7 +631,8 @@ class DataParallelPPOActor(BasePPOActor):
 
                     metrics["actor/pg_loss"] += pg_loss.detach().item() * loss_scale_factor
                     append_to_dict(metrics, micro_batch_metrics)
-
+                if param_avgs is not None:
+                    self.actor_optimizer._restore_param_average(train=True, param_avg=param_avgs, noise=noise_samples)
                 grad_norm = self._optimizer_step()
                 mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)

@@ -73,14 +73,9 @@ class TrainingWorker(Worker, DistProfilerExtension):
         if self.engine_config is None:
             assert self.optimizer_config is None
             if self.config.auto_select_engine_optim_fn is None:
-                raise ValueError(
-                    "engine_config is not provided and auto_select_engine_optim_fn is not set. "
-                    "Cannot determine engine backend."
-                )
+                raise ValueError("engine_config is not provided and auto_select_engine_optim_fn is not set. Cannot determine engine backend.")
             # Support automatically select engine backend given model config
-            self.engine_config, self.optimizer_config = self.config.auto_select_engine_optim_fn(
-                self.model_config, self.device_name
-            )
+            self.engine_config, self.optimizer_config = self.config.auto_select_engine_optim_fn(self.model_config, self.device_name)
 
         # we use the one defined in model
         # TODO: this is not elegant and should refactor later
@@ -98,9 +93,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
         else:
             self.profiler_tool_config = None
 
-        DistProfilerExtension.__init__(
-            self, DistProfiler(rank=self.rank, config=self.profiler_config, tool_config=self.profiler_tool_config)
-        )
+        DistProfilerExtension.__init__(self, DistProfiler(rank=self.rank, config=self.profiler_config, tool_config=self.profiler_tool_config))
 
         self.engine: BaseEngine = EngineRegistry.new(
             model_type=self.config.model_type,
@@ -163,9 +156,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
         # Here each metric in metrics can be a list (micro-batch metrics) or a singleton
         # we should always sum the loss of each micro-batch as we scale by global_bsz/global_token
         loss = torch.sum(torch.tensor(output.pop("loss"), device=self.device_name))
-        torch.distributed.all_reduce(
-            loss, op=torch.distributed.ReduceOp.AVG, group=self.engine.get_data_parallel_group()
-        )
+        torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=self.engine.get_data_parallel_group())
         loss = loss.item()
 
         # For grad_norm, we do not perform all reduce because it is already been done when clipping grad
@@ -222,9 +213,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
             assert batch_size_per_dp % num_mini_batch == 0, f"Got {batch_size_per_dp=} and {num_mini_batch=}"
             mini_batch_size_per_gpu = batch_size_per_dp // num_mini_batch
         else:
-            assert mini_batch_size % self.engine.get_data_parallel_size() == 0, (
-                f"Got {mini_batch_size=} and {self.engine.get_data_parallel_size()=}"
-            )
+            assert mini_batch_size % self.engine.get_data_parallel_size() == 0, f"Got {mini_batch_size=} and {self.engine.get_data_parallel_size()=}"
             mini_batch_size_per_gpu = mini_batch_size // self.engine.get_data_parallel_size()
 
         # make iterator
@@ -249,9 +238,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
                 global_token_num = mini_batch_td["input_ids"].offsets().diff().tolist()  # (total_nnz,)
                 # allgather from dp rank
                 global_token_num_output = [None] * self.engine.get_data_parallel_size()
-                torch.distributed.all_gather_object(
-                    global_token_num_output, global_token_num, self.engine.get_data_parallel_group()
-                )
+                torch.distributed.all_gather_object(global_token_num_output, global_token_num, self.engine.get_data_parallel_group())
                 global_token_num = [x for xs in global_token_num_output for x in xs]
                 tu.assign_non_tensor(
                     mini_batch_td,
@@ -269,11 +256,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
                     for key, val in output.items():
                         # flattn dp and micro batch
                         if isinstance(val, list):
-                            output[key] = (
-                                Metric.aggregate_dp(val)
-                                if isinstance(val[0], Metric)
-                                else list(chain.from_iterable(val))
-                            )
+                            output[key] = Metric.aggregate_dp(val) if isinstance(val[0], Metric) else list(chain.from_iterable(val))
                     append_to_dict(metrics, output)
 
                 output = tu.get_tensordict(tensor_dict={}, non_tensor_dict={"metrics": metrics}).cpu()
@@ -323,9 +306,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
             output.pop("model_output")
             if lr is not None:
                 output["metrics"]["lr"] = lr
-            final_output = self._postprocess_output(
-                output, global_token_num=global_token_num, delta_time=delta_time, forward_only=False
-            ).cpu()
+            final_output = self._postprocess_output(output, global_token_num=global_token_num, delta_time=delta_time, forward_only=False).cpu()
         else:
             final_output = None
 
@@ -364,9 +345,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
         delta_time = timer.last
 
         if self.engine.is_mp_src_rank_with_outputs():
-            final_output = self._postprocess_output(
-                output, global_token_num=global_token_num, delta_time=delta_time, forward_only=True
-            ).cpu()
+            final_output = self._postprocess_output(output, global_token_num=global_token_num, delta_time=delta_time, forward_only=True).cpu()
         else:
             final_output = None
 
@@ -411,15 +390,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         profiler_config = omega_conf_to_dataclass(omega_profiler_config, dataclass_type=ProfilerConfig)
         if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch", "torch_memory"]:
-            tool_config = omega_conf_to_dataclass(
-                omega_profiler_config.get("tool_config", {}).get(omega_profiler_config.get("tool"))
-            )
+            tool_config = omega_conf_to_dataclass(omega_profiler_config.get("tool_config", {}).get(omega_profiler_config.get("tool")))
         else:
             tool_config = None
 
-        DistProfilerExtension.__init__(
-            self, DistProfiler(rank=self.rank, config=profiler_config, tool_config=tool_config)
-        )
+        DistProfilerExtension.__init__(self, DistProfiler(rank=self.rank, config=profiler_config, tool_config=tool_config))
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def set_loss_fn(self, loss_fn):
@@ -440,9 +415,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             with open_dict(self.config.ref):
                 self.config.ref.ppo_mini_batch_size = self.config.actor.ppo_mini_batch_size
                 self.config.ref.ppo_micro_batch_size = self.config.ref.pop("log_prob_micro_batch_size", None)
-                self.config.ref.ppo_micro_batch_size_per_gpu = self.config.ref.pop(
-                    "log_prob_micro_batch_size_per_gpu", None
-                )
+                self.config.ref.ppo_micro_batch_size_per_gpu = self.config.ref.pop("log_prob_micro_batch_size_per_gpu", None)
                 self.config.ref.use_dynamic_bsz = self.config.ref.pop("log_prob_use_dynamic_bsz", False)
                 self.config.ref.ppo_max_token_len_per_gpu = self.config.ref.pop("log_prob_max_token_len_per_gpu", None)
             ref_config: ActorConfig = omega_conf_to_dataclass(self.config.ref)
@@ -460,9 +433,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # assign engine configs
             ref_training_config.engine_config.use_dynamic_bsz = self.config.ref.use_dynamic_bsz
             ref_training_config.engine_config.infer_max_token_len_per_gpu = self.config.ref.ppo_max_token_len_per_gpu
-            ref_training_config.engine_config.infer_micro_batch_size_per_gpu = (
-                self.config.ref.ppo_micro_batch_size_per_gpu
-            )
+            ref_training_config.engine_config.infer_micro_batch_size_per_gpu = self.config.ref.ppo_micro_batch_size_per_gpu
             ref_training_config.engine_config.use_remove_padding = model_config.use_remove_padding
 
             self.ref = TrainingWorker(config=ref_training_config)
@@ -486,16 +457,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
             # assign engine configs
             actor_training_config.engine_config.use_dynamic_bsz = self.config.actor.use_dynamic_bsz
-            actor_training_config.engine_config.infer_max_token_len_per_gpu = (
-                self.config.rollout.log_prob_max_token_len_per_gpu
-            )
-            actor_training_config.engine_config.infer_micro_batch_size_per_gpu = (
-                self.config.rollout.log_prob_micro_batch_size_per_gpu
-            )
+            actor_training_config.engine_config.infer_max_token_len_per_gpu = self.config.rollout.log_prob_max_token_len_per_gpu
+            actor_training_config.engine_config.infer_micro_batch_size_per_gpu = self.config.rollout.log_prob_micro_batch_size_per_gpu
             actor_training_config.engine_config.max_token_len_per_gpu = self.config.actor.ppo_max_token_len_per_gpu
-            actor_training_config.engine_config.micro_batch_size_per_gpu = (
-                self.config.actor.ppo_micro_batch_size_per_gpu
-            )
+            actor_training_config.engine_config.micro_batch_size_per_gpu = self.config.actor.ppo_micro_batch_size_per_gpu
             actor_training_config.engine_config.use_remove_padding = model_config.use_remove_padding
 
             if self.config.actor.use_dynamic_bsz:
@@ -521,18 +486,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             infer_pp = rollout_config.pipeline_model_parallel_size
             infer_world_size = infer_tp * infer_pp
             dp = self.world_size // infer_world_size
-            assert self.world_size % infer_world_size == 0, (
-                f"rollout world_size: {self.world_size} is not divisible by infer_world_size: {infer_world_size}"
-            )
-            rollout_device_mesh = init_device_mesh(
-                get_device_name(), mesh_shape=(dp, infer_tp, infer_pp), mesh_dim_names=["dp", "infer_tp", "infer_pp"]
-            )
+            assert self.world_size % infer_world_size == 0, f"rollout world_size: {self.world_size} is not divisible by infer_world_size: {infer_world_size}"
+            rollout_device_mesh = init_device_mesh(get_device_name(), mesh_shape=(dp, infer_tp, infer_pp), mesh_dim_names=["dp", "infer_tp", "infer_pp"])
 
             # 3.2 initialize rollout engine
             rollout_cls: type[BaseRollout] = get_rollout_class(rollout_config.name, rollout_config.mode)
-            self.rollout = rollout_cls(
-                config=rollout_config, model_config=model_config, device_mesh=rollout_device_mesh
-            )
+            self.rollout = rollout_cls(config=rollout_config, model_config=model_config, device_mesh=rollout_device_mesh)
 
             # used for LoRA
             self.base_sync_done: bool = "dummy" not in self.config.rollout.load_format
@@ -545,9 +504,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             backend = checkpoint_engine_config.backend
             bucket_size = checkpoint_engine_config.update_weights_bucket_megabytes << 20
             engine_kwargs = checkpoint_engine_config.engine_kwargs.get(backend, {})
-            self.checkpoint_engine = CheckpointEngineRegistry.new(
-                backend, is_master=(torch.distributed.get_rank() == 0), bucket_size=bucket_size, **engine_kwargs
-            )
+            self.checkpoint_engine = CheckpointEngineRegistry.new(backend, is_master=(torch.distributed.get_rank() == 0), bucket_size=bucket_size, **engine_kwargs)
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="ref"))
     @DistProfiler.annotate(color="olive", role="ref_compute_log_prob")
@@ -603,9 +560,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         log_gpu_memory_usage("After resume weights", logger=logger)
 
         # 2. get per tensor generator from engine, this will load model to gpu
-        per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param(
-            layered_summon=self.layered_summon, base_sync_done=True
-        )
+        per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param(layered_summon=self.layered_summon, base_sync_done=True)
 
         await self.rollout.update_weights(per_tensor_param, peft_config=peft_config, base_sync_done=True)
 
@@ -619,9 +574,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             do_lora_base_sync = not self.base_sync_done or self.rollout.sleep_level != 1
 
         if do_lora_base_sync:
-            per_tensor_base_params, _ = self.actor.engine.get_per_tensor_param(
-                layered_summon=self.layered_summon, base_sync_done=False
-            )
+            per_tensor_base_params, _ = self.actor.engine.get_per_tensor_param(layered_summon=self.layered_summon, base_sync_done=False)
             await self.rollout.update_weights(per_tensor_base_params, peft_config=peft_config, base_sync_done=False)
 
         log_gpu_memory_usage("After update_weights", logger=logger)
