@@ -15,9 +15,8 @@
 Preprocess the GSM8k dataset to parquet format
 """
 
-import argparse
-import os
 import re
+from pathlib import Path
 
 import datasets
 
@@ -31,23 +30,14 @@ def extract_solution(solution_str):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default=None, help="The save directory for the preprocessed dataset.")
-
-    args = parser.parse_args()
-    local_dataset_path = args.local_dataset_path
-
     data_source = "openai/gsm8k"
 
-    if local_dataset_path is not None:
-        dataset = datasets.load_dataset(local_dataset_path, "main")
-    else:
-        dataset = datasets.load_dataset(data_source, "main")
+    dataset = datasets.load_dataset(data_source, "main")
 
     train_dataset = dataset["train"]
     test_dataset = dataset["test"]
 
-    instruction_following = 'Let\'s think step by step and output the final answer after "####".'
+    instruction_following = 'Think step by step and output the final answer after "####".'
 
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
@@ -81,8 +71,7 @@ if __name__ == "__main__":
 
     train_dataset = train_dataset.map(function=make_map_fn("train"), with_indices=True)
     test_dataset = test_dataset.map(function=make_map_fn("test"), with_indices=True)
-
-    local_save_dir = args.local_dir
-
-    train_dataset.to_parquet(os.path.join(local_save_dir, "train.parquet"))
-    test_dataset.to_parquet(os.path.join(local_save_dir, "test.parquet"))
+    save_dir = Path(__file__).parents[2] / "data"
+    save_dir.mkdir(exist_ok=True, parents=True)
+    train_dataset.to_parquet(save_dir / "gsm8k-train.parquet")
+    test_dataset.to_parquet(save_dir / "gsm8k-test.parquet")
