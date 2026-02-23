@@ -368,9 +368,8 @@ class FSDPSFTTrainer:
 
         # Context manager for sequence parallel if needed
         sp_context = self.sharding_manager if use_sp else nullcontext()
-        ivon_context = self.optimizer.sampled_params(train=True) if self.config.optim.optimizer.lower() == "ivon" else nullcontext()
 
-        with sp_context, ivon_context, torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
+        with sp_context, torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
             if not use_sp:
                 # Standard forward pass without sequence parallel
                 labels = input_ids[:, 1:].contiguous()
@@ -462,9 +461,11 @@ class FSDPSFTTrainer:
         micro_batches = batch.split(self.config.data.micro_batch_size_per_gpu)
         n_micro_batches = len(micro_batches)
         step_loss = 0
-        for micro_batch in micro_batches:
-            loss = self._compute_loss_and_backward(batch=micro_batch, n_micro_batches=n_micro_batches)
-            step_loss += loss.item()
+        ivon_context = self.optimizer.sampled_params(train=True) if self.config.optim.optimizer.lower() == "ivon" else nullcontext()
+        with ivon_context:
+            for micro_batch in micro_batches:
+                loss = self._compute_loss_and_backward(batch=micro_batch, n_micro_batches=n_micro_batches)
+                step_loss += loss.item()
 
         if self.config.model.strategy == "fsdp":
             grad_norm = self.fsdp_model.clip_grad_norm_(max_norm=self.config.optim.clip_grad)
