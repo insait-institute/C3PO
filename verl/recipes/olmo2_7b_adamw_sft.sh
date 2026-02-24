@@ -2,17 +2,17 @@
 set -x
 
 nnodes=1
-nproc_per_node=4
+nproc_per_node=(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 master_port=${MASTER_PORT:-29500}
-project_name=bayesrl
-experiment_name=adamw-olmo2-7b-sft
+project_name=VeRL-SFT
+experiment_name=${EXPNAME:-adamw-olmo2-7b-sft}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
 TRAIN_DATA=$DATA_ROOT/tulu-3-sft-olmo-2-mixture-0225.parquet
 EVAL_DATA=null
-MODEL_PATH=allenai/OLMo-2-0425-7B
-TOKENIZER_PATH=allenai/OLMo-2-0425-7B-SFT
+MODEL_PATH=allenai/OLMo-2-1124-7B
+TOKENIZER_PATH=allenai/OLMo-2-1124-7B-SFT
 SAVE_PATH=$SAVE_ROOT/$experiment_name
 
 torchrun --nnodes=$nnodes \
@@ -26,7 +26,7 @@ torchrun --nnodes=$nnodes \
     data.multiturn.enable=true \
     data.multiturn.messages_key=messages \
     data.tokenizer_path=$TOKENIZER_PATH \
-    data.micro_batch_size_per_gpu=8 \
+    data.micro_batch_size_per_gpu=2 \
     model.partial_pretrain=$MODEL_PATH \
     model.strategy=fsdp2 \
     model.use_liger=true \
@@ -49,7 +49,7 @@ torchrun --nnodes=$nnodes \
     optim.lr=1e-5 \
     optim.betas=[0.9,0.999] \
     optim.weight_decay=0.01 \
-    optim.lr_warmup_steps_ratio=0.3 \
+    optim.lr_warmup_steps_ratio=0.1 \
     optim.clip_grad=1.0 \
     optim.lr_scheduler=cosine \
     optim.min_lr_ratio=0.1
