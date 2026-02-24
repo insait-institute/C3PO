@@ -6,7 +6,7 @@ nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 master_port=${MASTER_PORT:-29500}
 
 project_name=VeRL-SFT
-experiment_name=ivon-olmo2-1b-sft
+experiment_name=${EXPNAME:-ivon-olmo2-1b-sft}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
