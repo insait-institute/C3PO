@@ -1,6 +1,7 @@
 #!/bin/bash
 set -x
 
+LR=${LR:-5}
 nnodes=1
 nproc_per_node=2
 project_name=bayesrl
@@ -15,10 +16,11 @@ SAVE_PATH=$SAVE_ROOT/$experiment_name
 
 PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    algorithm.kl_ctrl.kl_coef=0 \
     data.train_files=$TRAIN_DATA \
     data.val_files=$EVAL_DATA \
     data.max_prompt_length=1024 \
-    data.max_response_length=4096 \
+    data.max_response_length=1024 \
     data.train_batch_size=64 \
     data.shuffle=True \
     actor_rollout_ref.model.path=$MODEL_PATH \
@@ -28,7 +30,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.strategy=fsdp2 \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=40000 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=50000 \
     actor_rollout_ref.actor.grad_clip=1.0 \
     actor_rollout_ref.actor.clip_ratio=0.2 \
     actor_rollout_ref.actor.use_kl_loss=False \
@@ -37,7 +39,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.shuffle=True \
     actor_rollout_ref.actor.optim.optimizer=IVON \
     actor_rollout_ref.actor.optim.optimizer_impl=ivon \
-    actor_rollout_ref.actor.optim.lr=5 \
+    actor_rollout_ref.actor.optim.lr=$LR \
     actor_rollout_ref.actor.optim.betas=[0.9,0.99999] \
     actor_rollout_ref.actor.optim.weight_decay=1e-4 \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.1 \
@@ -47,7 +49,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
-    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=40000 \
+    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=50000 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
@@ -60,9 +62,15 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=$nproc_per_node \
     trainer.logger='["console","wandb"]' \
     trainer.critic_warmup=0 \
-    trainer.total_epochs=2 \
-    trainer.save_freq=0.2 \
-    trainer.test_freq=0.1 \
-    trainer.val_before_train=False \
+    trainer.total_epochs=1 \
+    trainer.save_freq=0 \
+    trainer.test_freq=0 \
+    trainer.val_before_train=False\
     trainer.nnodes=$nnodes \
     trainer.n_gpus_per_node=$nproc_per_node
+
+
+#     algorithm.rollout_correction.rollout_is=sequence \
+#     algorithm.rollout_correction.rollout_is_threshold=2.0 \
+#     algorithm.rollout_correction.bypass_mode=True \
+#     actor_rollout_ref.rollout.calculate_log_probs=True \

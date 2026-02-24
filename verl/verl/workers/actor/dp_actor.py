@@ -475,7 +475,7 @@ class DataParallelPPOActor(BasePPOActor):
         return outputs
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
-    def update_policy(self, data: DataProto, param_avgs=None, noise_samples=None):
+    def update_policy(self, data: DataProto):
         # make sure we are in training mode
         self.actor_module.train()
 
@@ -631,8 +631,8 @@ class DataParallelPPOActor(BasePPOActor):
 
                     metrics["actor/pg_loss"] += pg_loss.detach().item() * loss_scale_factor
                     append_to_dict(metrics, micro_batch_metrics)
-                if param_avgs is not None:
-                    self.actor_optimizer._restore_param_average(train=True, param_avg=param_avgs, noise=noise_samples)
+                if hasattr(self.actor_optimizer, "_is_noised") and self.actor_optimizer._is_noised:
+                    self.actor_optimizer._restore_param_average(train=True)
                 grad_norm = self._optimizer_step()
                 mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)

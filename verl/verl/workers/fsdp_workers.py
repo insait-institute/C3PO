@@ -842,10 +842,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             data.meta_info.setdefault("pad_token_id", self.tokenizer.pad_token_id)
             # perform training
             with Timer(name="update_policy", logger=None) as timer:
-                if hasattr(self, "ivon_param_avg"):
-                    metrics = self.actor.update_policy(data=data, param_avgs=self.ivon_param_avg, noise_samples=self.ivon_noise)
-                else:
-                    metrics = self.actor.update_policy(data=data)
+                metrics = self.actor.update_policy(data=data)
             delta_time = timer.last
             global_num_tokens = data.meta_info["global_token_num"]
             images_seqlens = data.meta_info.get("images_seqlens", None)
@@ -876,6 +873,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=Dispatch.ALL_TO_ALL)
     @DistProfiler.annotate(color="red", role="actor_noise")
     def noise_actor(self):
+        if self.actor_optimizer._is_noised:
+            return None
         assert self._is_actor
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
@@ -883,7 +882,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             load_fsdp_optimizer(optimizer=self.actor_optimizer, device_id=get_device_id())
 
         with self.ulysses_sharding_manager:
-            self.ivon_param_avg, self.ivon_noise = self.actor_optimizer._sample_params()
+            self.actor_optimizer._sample_params()
+
         if self._is_offload_param:
             offload_fsdp_model_to_cpu(self.actor_module_fsdp)
             log_gpu_memory_usage("After offload actor model during noise_actor", logger=logger)

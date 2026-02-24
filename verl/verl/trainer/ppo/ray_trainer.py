@@ -373,6 +373,11 @@ class RayPPOTrainer:
         self.total_training_steps = total_training_steps
         print(f"Total training steps: {self.total_training_steps}")
 
+        if isinstance(self.config.trainer.save_freq, float):
+            self.config.trainer.save_freq = int(self.config.trainer.save_freq * total_training_steps)
+        if isinstance(self.config.trainer.test_freq, float):
+            self.config.trainer.test_freq = int(self.config.trainer.test_freq * total_training_steps)
+
         try:
             OmegaConf.set_struct(self.config, True)
             with open_dict(self.config):
@@ -1533,11 +1538,15 @@ class RayPPOTrainer:
                         # 2. It's the last training step.
                         # 3. The current step number is a multiple of the save frequency.
                         # 4. The ESI(Elastic Server Instance)/training plan is close to expiration.
-                        if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0 or esi_close_to_expiration):
+                        if (is_last_step or esi_close_to_expiration) or (self.config.trainer.save_freq > 0 and self.global_steps % self.config.trainer.save_freq == 0):
                             if esi_close_to_expiration:
                                 print("Force saving checkpoint: ESI instance expiration approaching.")
                             with marked_timer("save_checkpoint", timing_raw, color="green"):
                                 self._save_checkpoint()
+
+                        if is_last_step:
+                            with marked_timer("update_weights", timing_raw, color="red"):
+                                self.checkpoint_manager.update_weights()
 
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
