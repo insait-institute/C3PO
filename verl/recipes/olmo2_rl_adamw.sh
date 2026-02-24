@@ -2,9 +2,9 @@
 set -x
 
 nnodes=1
-nproc_per_node=2
-project_name=bayesrl
-experiment_name=adamw-olmo2-1b-rl
+nproc_per_node=(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
+project_name=VeRL-RL
+experiment_name=${EXPNAME:-adamw-olmo2-1b-rl}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
