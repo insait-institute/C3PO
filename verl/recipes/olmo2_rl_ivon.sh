@@ -3,7 +3,7 @@ set -x
 
 LR=${LR:-5}
 nnodes=1
-nproc_per_node=(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
+nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 project_name=VeRL-RL
 experiment_name=${EXPNAME:-ivon-olmo2-1b-rl}
 

@@ -2,10 +2,10 @@
 set -x
 
 nnodes=1
-nproc_per_node=2
+nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 master_port=${MASTER_PORT:-29500}
 
-project_name=bayesrl
+project_name=VeRL-SFT
 experiment_name=ivon-olmo2-1b-sft
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}

@@ -2,7 +2,7 @@
 set -x
 
 nnodes=1
-nproc_per_node=(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
+nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 master_port=${MASTER_PORT:-29500}
 project_name=VeRL-SFT
 experiment_name=${EXPNAME:-adamw-olmo2-7b-sft}
