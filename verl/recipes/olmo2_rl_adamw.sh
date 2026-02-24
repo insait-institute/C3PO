@@ -10,7 +10,7 @@ DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
 TRAIN_DATA=$DATA_ROOT/gsm8k-train.parquet
 EVAL_DATA=$DATA_ROOT/gsm8k-test.parquet
-MODEL_PATH=$WORK/bayesrl/adamw-olmo2-1b-sft/hf_model_12784
+MODEL_PATH=$WORK/bayesrl/adamw-olmo2-1b-sft/global_step_12784/huggingface
 SAVE_PATH=$SAVE_ROOT/$experiment_name
 
 PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \

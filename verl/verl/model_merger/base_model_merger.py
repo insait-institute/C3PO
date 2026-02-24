@@ -294,7 +294,7 @@ class BaseModelMerger(ABC):
         del state_dict
         del model
 
-        if optimizer_state_dict is not None:
+        if optimizer_state_dict:
             print(f"Saving optimizer state dict to {self.config.target_dir}")
             torch.save(optimizer_state_dict, os.path.join(self.config.target_dir, "optimizer.pt"))
 
