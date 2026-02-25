@@ -203,7 +203,7 @@ class FSDPModelMerger(BaseModelMerger):
             for key in optimizer_state_dict_lst[0]["param_groups"][0].keys():
                 if key in ["momentum", "hess"]:
                     optim_state_dict["param_groups"][0][key] = torch.cat([optimizer_state_dict_lst[rank]["param_groups"][0][key] for rank in range(total_shards)], dim=0)
-                elif key in ["numel", "local_numel"]:
+                elif key in ["local_numel"]:
                     optim_state_dict["param_groups"][0][key] = sum([optimizer_state_dict_lst[rank]["param_groups"][0][key] for rank in range(total_shards)])
         return state_dict, optim_state_dict
 
