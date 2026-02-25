@@ -48,3 +48,6 @@ warmup_style: null
 # override_optimizer_config:
 #   bf16_stochastic_round: true
 override_optimizer_config: null
+
+# Load optimizer state from checkpoint
+optimizer_load_path: null

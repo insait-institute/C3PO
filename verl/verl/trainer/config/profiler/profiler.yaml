@@ -9,7 +9,7 @@ tool: torch
 enable: False
 
 # Whether to profile all ranks.
-all_ranks: False
+all_ranks: True
 
 # The ranks that will be profiled. [] or [0,1,...]
 ranks: []

@@ -15,7 +15,6 @@ import warnings
 from dataclasses import dataclass
 from typing import Optional
 
-import torch
 from omegaconf import MISSING
 
 from verl.base_config import BaseConfig
@@ -102,13 +101,12 @@ class FSDPOptimizerConfig(OptimizerConfig):
     lr_scheduler_type: str = "constant"
     num_cycles: float = 0.5
     override_optimizer_config: Optional[dict] = None
+    optimizer_load_path: Optional[str] = None
 
     def __post_init__(self):
         if self.warmup_style is not None:
             assert self.warmup_style in ["constant", "cosine"]
-            warnings.warn(
-                "`warmup_style` is deprecated, use `lr_scheduler_type` instead.", DeprecationWarning, stacklevel=2
-            )
+            warnings.warn("`warmup_style` is deprecated, use `lr_scheduler_type` instead.", DeprecationWarning, stacklevel=2)
             self.lr_scheduler_type = self.warmup_style
         assert self.lr_scheduler_type in ["constant", "cosine"]
         return super().__post_init__()
@@ -176,7 +174,6 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         "lr": config.lr,
         "weight_decay": config.weight_decay,
     }
-    optim_load_path = None
     optimizer_name_lower = config.optimizer.lower()
     if "adam" in optimizer_name_lower or "ademamix" in optimizer_name_lower:
         optimizer_args["betas"] = config.betas
@@ -186,27 +183,14 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
-        if "ivon" in optimizer_name_lower and optimizer_args.get("optimizer_load_path"):
-            optim_load_path = optimizer_args.pop("optimizer_load_path")
 
     try:
         module = importlib.import_module(config.optimizer_impl)
         optimizer_cls = getattr(module, config.optimizer)
     except ImportError as e:
-        raise ImportError(
-            f"Failed to import module '{config.optimizer_impl}'. Make sure the package is installed. Error: {e}"
-        ) from e
+        raise ImportError(f"Failed to import module '{config.optimizer_impl}'. Make sure the package is installed. Error: {e}") from e
     except AttributeError as e:
-        raise AttributeError(
-            f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'."
-            f"Available optimizers: {dir(module)}"
-        ) from e
+        raise AttributeError(f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'.Available optimizers: {dir(module)}") from e
 
     optimizer = optimizer_cls(parameters, **optimizer_args)
-    if "ivon" in optimizer_name_lower:
-        if optim_load_path:
-            optimizer.load_state_dict(torch.load(optim_load_path))
-        for group in optimizer.param_groups:
-            group["initial_lr"] = config.lr
-            group["lr"] = config.lr
     return optimizer

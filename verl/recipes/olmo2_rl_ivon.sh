@@ -11,7 +11,7 @@ DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
 TRAIN_DATA=$DATA_ROOT/gsm8k-train.parquet
 EVAL_DATA=$DATA_ROOT/gsm8k-test.parquet
-MODEL_PATH=$WORK/bayesrl/ivon-olmo2-1b-sft/global_step_12784/huggingface
+MODEL_PATH=BayesRL/ivon-1b-sft
 SAVE_PATH=$SAVE_ROOT/$experiment_name
 
 PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
@@ -46,7 +46,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
     actor_rollout_ref.actor.optim.clip_grad=1.0 \
     actor_rollout_ref.actor.optim.override_optimizer_config='{ess:1e8,hess_init:0.001,clip_radius:1e-3,rescale_lr:True,sync:false}' \
-    +actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH/optimizer.pt \
+    +actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
