@@ -41,7 +41,6 @@ try:
 except ImportError:
     from torch.distributed._tensor import DTensor
 
-from huggingface_hub import hf_hub_download
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
@@ -540,11 +539,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             from verl.utils.torch_functional import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
 
             actor_optimizer = build_optimizer(actor_module_fsdp.parameters(), optim_config)
-
-            if "ivon" in optim_config.optimizer.lower() and optim_config.optimizer_load_path:
-                actor_optimizer = self._load_ivon_optimizer(actor_optimizer, optim_config)
-                print(f"Loaded IVON optimizer from {optim_config.optimizer_load_path}")
-
             total_steps = optim_config.get("total_training_steps", 0)
             num_warmup_steps = int(optim_config.get("lr_warmup_steps", -1))
             lr_scheduler_type = optim_config.get("lr_scheduler_type", "constant")
@@ -576,40 +570,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             actor_lr_scheduler = None
 
         return actor_module_fsdp, actor_optimizer, actor_lr_scheduler, actor_model_config
-
-    def _load_optim_state_dict(self, path_or_repo, filename="optimizer.pt"):
-        is_local = os.path.exists(path_or_repo)
-        is_dist = dist.is_initialized()
-        checkpoint_path = None
-        if is_local:
-            checkpoint_path = os.path.join(path_or_repo, filename) if os.path.isdir(path_or_repo) else path_or_repo
-        else:
-            if self.rank == 0:
-                checkpoint_path = hf_hub_download(repo_id=path_or_repo, filename=filename)
-            if is_dist:
-                path_list = [checkpoint_path]
-                dist.broadcast_object_list(path_list, src=0)
-                checkpoint_path = path_list[0]
-        if is_dist:
-            dist.barrier()
-        return torch.load(checkpoint_path, map_location="cpu", mmap=True)
-
-    def _load_ivon_optimizer(self, optimizer, optim_config):
-        optim_state_dict = self._load_optim_state_dict(optim_config.optimizer_load_path)
-        for group in optim_state_dict["param_groups"]:
-            optim_numel = group["numel"]
-            if optim_numel % self.world_size:
-                raise RuntimeError(f"Total elements {optim_numel} must be divisible by world_size {self.world_size}")
-            slice_size = optim_numel // self.world_size
-            start, end = self.rank * slice_size, (self.rank + 1) * slice_size
-            for key in ["momentum", "hess"]:
-                group[key] = group[key][start:end].to("cuda", non_blocking=True).clone()
-            group["local_numel"] = slice_size
-            group["initial_lr"] = optim_config.lr
-            group["lr"] = optim_config.lr
-
-        optimizer.load_state_dict(optim_state_dict)
-        return optimizer
 
     def _build_rollout(self, trust_remote_code=False):
         from torch.distributed.device_mesh import init_device_mesh

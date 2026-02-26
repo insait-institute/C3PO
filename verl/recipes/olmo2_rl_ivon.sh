@@ -2,6 +2,7 @@
 set -x
 
 LR=${LR:-5}
+ESS=${ESS:-1}
 nnodes=1
 nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 project_name=VeRL-RL
@@ -45,7 +46,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.1 \
     actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
     actor_rollout_ref.actor.optim.clip_grad=1.0 \
-    actor_rollout_ref.actor.optim.override_optimizer_config='{ess:1e8,hess_init:0.001,clip_radius:1e-3,rescale_lr:True,sync:false}' \
+    actor_rollout_ref.actor.optim.override_optimizer_config="{ess:1e8,hess_init:0.001,clip_radius:1e-3,rescale_lr:True,sync:false,ess_scale:$ESS}" \
     +actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \

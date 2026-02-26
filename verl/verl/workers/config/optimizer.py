@@ -11,10 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import warnings
 from dataclasses import dataclass
 from typing import Optional
 
+import torch
+import torch.distributed as dist
+from huggingface_hub import hf_hub_download
 from omegaconf import MISSING
 
 from verl.base_config import BaseConfig
@@ -183,7 +187,7 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
-
+    ess_scale = optimizer_args.pop("ess_scale", 1.0)
     try:
         module = importlib.import_module(config.optimizer_impl)
         optimizer_cls = getattr(module, config.optimizer)
@@ -193,4 +197,46 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         raise AttributeError(f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'.Available optimizers: {dir(module)}") from e
 
     optimizer = optimizer_cls(parameters, **optimizer_args)
+    if optimizer_args.get("optimizer_load_path") and "ivon" in optimizer_name_lower:
+        optimizer = _load_ivon_checkpoint(optimizer, optimizer_args.get("optimizer_load_path"))
+    if "ivon" in optimizer_name_lower:
+        for group in optimizer.param_groups:
+            group["initial_lr"] = config.lr
+            group["lr"] = config.lr
+            group["ess"] *= ess_scale
+    return optimizer
+
+
+def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
+    is_local = os.path.exists(path_or_repo)
+    is_dist = dist.is_initialized()
+    checkpoint_path = None
+    if is_local:
+        checkpoint_path = os.path.join(path_or_repo, filename) if os.path.isdir(path_or_repo) else path_or_repo
+    else:
+        if dist.get_rank() == 0:
+            checkpoint_path = hf_hub_download(repo_id=path_or_repo, filename=filename)
+        if is_dist:
+            path_list = [checkpoint_path]
+            dist.broadcast_object_list(path_list, src=0)
+            checkpoint_path = path_list[0]
+    if is_dist:
+        dist.barrier()
+    return torch.load(checkpoint_path, map_location="cpu", mmap=True)
+
+
+def _load_ivon_checkpoint(optimizer, optim_load_path):
+    rank, world_size = dist.get_rank(), dist.get_world_size()
+    optim_state_dict = _load_optim_state_dict(optim_load_path)
+    for group in optim_state_dict["param_groups"]:
+        optim_numel = group["numel"]
+        if optim_numel % world_size:
+            raise RuntimeError(f"Total elements {optim_numel} must be divisible by world_size {world_size}")
+        slice_size = optim_numel // world_size
+        start, end = rank * slice_size, (rank + 1) * slice_size
+        for key in ["momentum", "hess"]:
+            group[key] = group[key][start:end].to("cuda", non_blocking=True).clone()
+        group["local_numel"] = slice_size
+
+    optimizer.load_state_dict(optim_state_dict)
     return optimizer
