@@ -1,17 +1,17 @@
 #!/bin/bash
 set -x
 
-LR=${LR:-5}
+LR=${LR:-2}
 ESS=${ESS:-1}
 ESS_SCHEDULE=${ESS_SCHEDULE:-constant}
 nnodes=1
 nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 project_name=VeRL-RL
-experiment_name=${EXPNAME:-ivon-olmo2-1b-rl}
+experiment_name=${EXPNAME:-ivon-olmo2-1b-rl-dapomath}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
-TRAIN_DATA=$DATA_ROOT/gsm8k-train.parquet
+TRAIN_DATA=$DATA_ROOT/dapomath-train.parquet
 EVAL_DATA=$DATA_ROOT/gsm8k-test.parquet
 MODEL_PATH=BayesRL/ivon-1b-sft
 SAVE_PATH=$SAVE_ROOT/$experiment_name
@@ -21,16 +21,16 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     algorithm.kl_ctrl.kl_coef=0 \
     data.train_files=$TRAIN_DATA \
     data.val_files=$EVAL_DATA \
-    data.max_prompt_length=1024 \
-    data.max_response_length=1024 \
-    data.train_batch_size=64 \
+    data.max_prompt_length=1536 \
+    data.max_response_length=3072 \
+    data.train_batch_size=32 \
     data.shuffle=True \
     actor_rollout_ref.model.path=$MODEL_PATH \
     actor_rollout_ref.model.enable_activation_offload=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=50000 \
     actor_rollout_ref.actor.grad_clip=1.0 \
