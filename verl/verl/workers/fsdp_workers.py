@@ -18,6 +18,7 @@ The main entry point to run the PPO algorithm
 import datetime
 import json
 import logging
+import math
 import os
 import warnings
 from dataclasses import asdict
@@ -547,6 +548,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             if num_warmup_steps < 0:
                 num_warmup_steps_ratio = optim_config.get("lr_warmup_steps_ratio", 0.0)
                 num_warmup_steps = int(num_warmup_steps_ratio * total_steps)
+            self.total_steps = total_steps
+            self.num_warmup_steps = num_warmup_steps
+            if optim_config.get("override_optimizer_config") is not None:
+                self.initial_ess = optim_config.override_optimizer_config.get("ess")
+                if "adaptive" in optim_config.override_optimizer_config.get("ess_schedule"):
+                    self.max_entropy = None
 
             if self.rank == 0:
                 print(f"Total steps: {total_steps}, num_warmup_steps: {num_warmup_steps}")
@@ -851,11 +858,38 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             metrics["perf/max_memory_allocated_gb"] = get_torch_device().max_memory_allocated() / (1024**3)
             metrics["perf/max_memory_reserved_gb"] = get_torch_device().max_memory_reserved() / (1024**3)
             metrics["perf/cpu_memory_used_gb"] = psutil.virtual_memory().used / (1024**3)
-
+            if "actor/entropy" in metrics:
+                metrics["actor/entropy"] = sum(metrics["actor/entropy"]) / len(metrics["actor/entropy"])
             lr = self.actor_lr_scheduler.get_last_lr()[0]
             metrics["actor/lr"] = lr.item() if torch.is_tensor(lr) else lr
             self.actor_lr_scheduler.step()
+            # Update the ESS according to the scheduler type ("constant", "linear", "cosine", "adaptive")
+            optim_config = self.config.actor.optim
+            if "ivon" in optim_config.optimizer.lower():
+                ess_scale = optim_config.override_optimizer_config.get("initial_ess_scale", 1.0)
+                min_ess_ratio = optim_config.override_optimizer_config.get("min_ess_ratio", 0.0)
+                ess_schedule = optim_config.override_optimizer_config.get("ess_schedule", "constant")
+                progress = self.actor_optimizer.current_step / self.total_steps
 
+                if ess_schedule == "cosine":
+                    ess_scale = math.cos(math.pi * progress)
+                    ess_scale = ess_scale * (1 - min_ess_ratio) * 0.5 + (1 + min_ess_ratio) * 0.5
+                elif ess_schedule == "linear":
+                    ess_scale = 1.0 - (1.0 - min_ess_ratio) * progress
+                elif ess_schedule == "adaptive_1":
+                    if self.actor_optimizer.current_step == 1 or self.max_entropy < metrics["actor/entropy"]:
+                        self.max_entropy = metrics["actor/entropy"]
+                    elif metrics["actor/entropy"] <= 0.75 * self.max_entropy:
+                        ess_scale *= 0.5
+                elif ess_schedule == "adaptive_2":
+                    if self.actor_optimizer.current_step != 1:
+                        ess_scale = self.prev_ess_scale * (metrics["actor/entropy"] / self.prev_entropy)
+                    self.prev_entropy = metrics["actor/entropy"]
+                    self.prev_ess_scale = ess_scale
+
+                for param_group in self.actor.actor_optimizer.param_groups:
+                    param_group["ess"] = self.initial_ess * ess_scale
+                metrics["actor/ess_scale"] = ess_scale
             # TODO: here, we should return all metrics
             output = DataProto(meta_info={"metrics": metrics})
 
@@ -867,7 +901,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         if self._is_offload_optimizer:
             offload_fsdp_optimizer(optimizer=self.actor_optimizer)
             log_gpu_memory_usage("After offload actor optimizer during update_actor", logger=logger)
-
         return output
 
     @register(dispatch_mode=Dispatch.ALL_TO_ALL)
