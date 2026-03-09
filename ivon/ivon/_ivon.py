@@ -211,14 +211,14 @@ class IVON(torch.optim.Optimizer):
             return self.state["param_avgs"], self.state["noise"]
         noise_samples = []
         param_avgs = []
-        sync_seed = self.current_step + 42
-        g = torch.Generator(device=self._device)
-        g.manual_seed(sync_seed)
+        # sync_seed = self.current_step + 42
+        # g = torch.Generator(device=self._device)
+        # g.manual_seed(sync_seed)
 
         local_offset = 0
         for group in self.param_groups:
             gnumel = group["numel"]
-            raw_noise_sample = torch.randn(gnumel, device=self._device, dtype=self._dtype, generator=g)
+            raw_noise_sample = torch.randn(gnumel, device=self._device, dtype=self._dtype)
 
             goffset = 0
             group_noise = []
