@@ -11,7 +11,7 @@ experiment_name=${EXPNAME:-ivon-olmo2-1b-rl-dapomath}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
-TRAIN_DATA=$DATA_ROOT/dapomath-train.parquet
+TRAIN_DATA=$DATA_ROOT/olmo-dapomath-train.parquet
 EVAL_DATA=$DATA_ROOT/gsm8k-test.parquet
 MODEL_PATH=BayesRL/ivon-7b-sft
 SAVE_PATH=$SAVE_ROOT/$experiment_name
