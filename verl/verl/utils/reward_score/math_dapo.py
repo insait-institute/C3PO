@@ -162,9 +162,7 @@ def normalize_final_answer(final_answer: str) -> str:
     return final_answer.strip()
 
 
-def is_correct_minerva(
-    solution_str: str, gt: str, gt_need_extract: bool = False, answer_pattern: str = r"(?i)Answer\s*:\s*([^\n]+)"
-) -> tuple[bool, str]:
+def is_correct_minerva(solution_str: str, gt: str, gt_need_extract: bool = False, answer_pattern: str = r"(?i)Answer\s*:\s*([^\n]+)") -> tuple[bool, str]:
     """Check if the solution is correct according to Minerva criteria.
 
     Args:
@@ -190,9 +188,7 @@ def is_correct_minerva(
     return (pred == gt), pred
 
 
-def is_correct_strict_box(
-    pred: str, gt: str, pause_tokens_index: Optional[list[int]] = None
-) -> tuple[int, Optional[str]]:
+def is_correct_strict_box(pred: str, gt: str, pause_tokens_index: Optional[list[int]] = None) -> tuple[int, Optional[str]]:
     """Check if the prediction is correct using strict boxed answer criteria.
 
     Args:
@@ -217,9 +213,7 @@ def is_correct_strict_box(
     return 1 if (extracted_pred == gt) else -1, extracted_pred
 
 
-def verify(
-    solution_str: str, answer: str, strict_box_verify: bool = False, pause_tokens_index: Optional[list[int]] = None
-) -> bool:
+def verify(solution_str: str, answer: str, strict_box_verify: bool = False, pause_tokens_index: Optional[list[int]] = None) -> bool:
     """Verify if the solution is correct.
 
     Args:
@@ -239,10 +233,16 @@ def verify(
     return correct, pred
 
 
+def verify_format_correctness(sol: str):
+    pattern = r"^<think>(?!.*<think>)(.*?)</think>\s*\\boxed\{(.*?)\}$"
+    match = re.match(pattern, sol, re.DOTALL | re.MULTILINE)
+    return True if match else False
+
+
 def compute_score(
     solution_str: str,
     ground_truth: str,
-    strict_box_verify: bool = False,
+    strict_box_verify: bool = True,
     pause_tokens_index: Optional[list[int]] = None,
 ) -> float:
     """Compute the reward score for a solution.
@@ -254,7 +254,7 @@ def compute_score(
         pause_tokens_index: Indices of pause tokens
 
     Returns:
-        Reward score (1.0 for correct, -1.0 for incorrect)
+        Reward score (1.0 for correct, 1.0 for format)
     """
     # Limit solution length for efficiency
     solution_str = solution_str[-300:]  # The longest answer in MATH-500 has 159 characters
@@ -262,11 +262,14 @@ def compute_score(
     # Verify the solution
     correct, pred = verify(solution_str, ground_truth, strict_box_verify, pause_tokens_index)
 
-    reward = 1.0 if correct else -1.0
+    format_correct = verify_format_correctness(solution_str)
+
+    correct_reward = 1 if correct else 0
+    format_reward = 1 if format_correct else 0
     acc = correct
 
     return {
-        "score": reward,
+        "score": correct_reward + format_reward,
         "acc": acc,
         "pred": pred,
     }
