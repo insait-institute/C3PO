@@ -183,6 +183,9 @@ trainer:
   # Validation frequency (in training iterations)
   test_freq: -1
 
+  # Logging frequency for GRPO completions
+  log_completions_freq: 0
+
   # Number of iterations to warm up the critic before updating policy
   critic_warmup: 0
 

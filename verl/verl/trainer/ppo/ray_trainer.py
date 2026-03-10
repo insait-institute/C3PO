@@ -377,6 +377,8 @@ class RayPPOTrainer:
             self.config.trainer.save_freq = int(self.config.trainer.save_freq * total_training_steps)
         if isinstance(self.config.trainer.test_freq, float):
             self.config.trainer.test_freq = int(self.config.trainer.test_freq * total_training_steps)
+        if isinstance(self.config.trainer.log_completions_freq, float):
+            self.config.trainer.log_completions_freq = int(self.config.trainer.log_completions_freq * total_training_steps)
 
         try:
             OmegaConf.set_struct(self.config, True)
@@ -407,8 +409,15 @@ class RayPPOTrainer:
                 base_data[k] = v
 
         lines = []
+        # Replace your existing loop with this:
         for i in range(n):
-            entry = {k: v[i] for k, v in base_data.items()}
+            entry = {}
+            for k, v in base_data.items():
+                val = v[i]
+                # Check if it has the .item() method (standard for NumPy types)
+                if hasattr(val, "item"):
+                    val = val.item()
+                entry[k] = val
             lines.append(json.dumps(entry, ensure_ascii=False))
 
         with open(filename, "w") as f:
@@ -1334,7 +1343,6 @@ class RayPPOTrainer:
                             self.checkpoint_manager.sleep_replicas()
                             if curr_step_profile:
                                 self.async_rollout_manager.stop_profile()
-
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
 
@@ -1553,7 +1561,9 @@ class RayPPOTrainer:
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
-                    if rollout_data_dir:
+                    if self.config.trainer.log_completions_freq > 0 and self.global_steps % self.config.trainer.log_completions_freq == 0:
+                        if not rollout_data_dir:
+                            rollout_data_dir = os.path.join(self.config.trainer.default_local_dir, "rollout")
                         self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_dir)
 
                 # validate
