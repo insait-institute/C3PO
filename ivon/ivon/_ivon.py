@@ -6,7 +6,7 @@ import torch
 import torch.distributed as dist
 import torch.optim
 from torch import Tensor
-from torch.distributed.tensor import DTensor, distribute_tensor
+from torch.distributed.tensor import DTensor
 
 ClosureType = Callable[[], Tensor]
 
@@ -116,12 +116,9 @@ class IVON(torch.optim.Optimizer):
 
     def _init_buffers(self):
         for group in self.param_groups:
-            l_numel = group["local_numel"]
-            hess_init = group["hess_init"]
-
-            group["momentum"] = torch.zeros(l_numel, device=self._device, dtype=self._dtype)
-
-            group["hess"] = torch.full((l_numel,), hess_init, device=self._device, dtype=self._dtype)
+            hess_init, numel = group["hess_init"], group["local_numel"]
+            group["momentum"] = torch.zeros(numel, device=self._device, dtype=self._dtype)
+            group["hess"] = torch.zeros(numel, device=self._device, dtype=self._dtype).add(torch.as_tensor(hess_init))
 
     @contextmanager
     def sampled_params(self, train: bool = False):
@@ -211,55 +208,32 @@ class IVON(torch.optim.Optimizer):
             return self.state["param_avgs"], self.state["noise"]
         noise_samples = []
         param_avgs = []
-        # sync_seed = self.current_step + 42
-        # g = torch.Generator(device=self._device)
-        # g.manual_seed(sync_seed)
-
-        local_offset = 0
+        offset = 0
         for group in self.param_groups:
-            gnumel = group["numel"]
-            raw_noise_sample = torch.randn(gnumel, device=self._device, dtype=self._dtype)
-
+            gnumel = group["local_numel"]
+            noise_sample = torch.randn(gnumel, device=self._device, dtype=self._dtype) / (group["ess"] * (group["hess"] + group["weight_decay"])).sqrt()
+            noise_samples.append(noise_sample)
             goffset = 0
-            group_noise = []
             for p in group["params"]:
                 if p is None:
                     continue
 
-                p_global_numel = p.numel()
-                p_raw_noise_slice = raw_noise_sample[goffset : goffset + p_global_numel]
-
                 if isinstance(p, DTensor):
-                    # to_local() returns a torch.Tensor that is a view of the DTensor
-                    # any changes to _local.data will be reflected in the DTensor
-                    p_local: torch.Tensor = p.to_local()
+                    p_local = p.to_local()
+                    p_numel = p_local.numel()
                     param_avgs.append(p_local.data.flatten().clone())
-
-                    p_noise_dtensor: DTensor = distribute_tensor(
-                        p_raw_noise_slice.view(p.shape),
-                        p.device_mesh,
-                        p.placements,
-                    )
-                    local_p_numel = p_local.numel()
-                    h_slice: torch.Tensor = group["hess"][local_offset : local_offset + local_p_numel]
-
-                    p_noise_local: torch.Tensor = p_noise_dtensor.to_local() / (group["ess"] * (h_slice.view(p_local.shape) + group["weight_decay"])).sqrt()
-                    p_local.data.add_(p_noise_local)
-
-                    group_noise.append(p_noise_local.flatten())
-                    local_offset += local_p_numel
+                    p_noise = noise_sample[goffset : goffset + p_numel]
+                    p_local.data.add_(p_noise.view(p_local.shape))
                 else:
+                    p_numel = p.numel()
                     param_avgs.append(p.data.flatten().clone())
-                    scaled_noise = p_raw_noise_slice.view(p.shape) / (group["ess"] * (group["hess"] + group["weight_decay"])).sqrt()
-                    p.data.add_(scaled_noise)
-                    group_noise.append(scaled_noise.flatten())
-                    local_offset += p_global_numel
+                    p_noise = noise_sample[goffset : goffset + p_numel]
+                    p.data.add_(p_noise.view(p.shape))
 
-                goffset += p_global_numel
+                goffset += p_numel
+                offset += p_numel
             assert goffset == gnumel
-            noise_samples.append(torch.cat(group_noise, 0))
-
-        assert local_offset == self._local_numel
+        assert offset == self._local_numel
         self._is_noised = True
         self.state["param_avgs"] = torch.cat(param_avgs, 0)
         self.state["noise"] = torch.cat(noise_samples, 0)
@@ -267,33 +241,23 @@ class IVON(torch.optim.Optimizer):
 
     def _update(self):
         self.current_step += 1
-
-        local_offset = 0
+        offset = 0
         for group in self.param_groups:
             lr = group["lr"]
             b1 = group["beta1"]
             b2 = group["beta2"]
+            pg_slice = slice(offset, offset + group["local_numel"])
 
-            l_numel = group["local_numel"]
-            local_pg_slice = slice(local_offset, local_offset + l_numel)
+            param_avg = torch.cat([p.to_local().flatten() if isinstance(p, DTensor) else p.flatten() for p in group["params"] if p is not None], 0)
 
-            param_avg_list = []
-            for p in group["params"]:
-                if p is not None:
-                    if isinstance(p, DTensor):
-                        param_avg_list.append(p.to_local().flatten())
-                    else:
-                        param_avg_list.append(p.flatten())
-            param_avg = torch.cat(param_avg_list, 0)
-
-            group["momentum"] = self._new_momentum(self.state["avg_grad"][local_pg_slice], group["momentum"], b1)
+            group["momentum"] = self._new_momentum(self.state["avg_grad"][pg_slice], group["momentum"], b1)
 
             group["hess"] = self._new_hess(
                 self.hess_approx,
                 group["hess"],
                 self.state["avg_nxg"],
                 self.state["avg_gsq"],
-                local_pg_slice,
+                pg_slice,
                 group["ess"],
                 b2,
                 group["weight_decay"],
@@ -310,21 +274,21 @@ class IVON(torch.optim.Optimizer):
                 group["hess_init"],
             )
 
-            pg_local_offset = 0
+            pg_offset = 0
             for p in group["params"]:
                 if p is not None:
                     if isinstance(p, DTensor):
                         p_local = p.to_local()
-                        p_local.data.copy_(param_avg[pg_local_offset : pg_local_offset + p_local.numel()].view(p_local.shape))
-                        pg_local_offset += p_local.numel()
+                        p_local.data.copy_(param_avg[pg_offset : pg_offset + p_local.numel()].view(p_local.shape))
+                        pg_offset += p_local.numel()
                     else:
-                        p.data.copy_(param_avg[pg_local_offset : pg_local_offset + p.numel()].view(p.shape))
-                        pg_local_offset += p.numel()
+                        p.data.copy_(param_avg[pg_offset : pg_offset + p.numel()].view(p.shape))
+                        pg_offset += p.numel()
 
-            assert pg_local_offset == l_numel
-            local_offset += l_numel
+            assert pg_offset == group["local_numel"]
+            offset += group["local_numel"]
 
-        assert local_offset == self._local_numel
+        assert offset == self._local_numel
 
     def _restore_noised_params(self, noise: Tensor):
         offset = 0
@@ -365,7 +329,22 @@ class IVON(torch.optim.Optimizer):
     @staticmethod
     def _new_hess(method, hess, avg_nxg, avg_gsq, pg_slice, ess, beta2, wd) -> Tensor:
         f = IVON._get_nll_hess(method, hess + wd, avg_nxg, avg_gsq, pg_slice) * ess
-        return beta2 * hess + (1.0 - beta2) * f + (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd)
+        return_val = beta2 * hess + (1.0 - beta2) * f + (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd)
+        # if (return_val < 0).any():
+        #     print("Negative return_val detected")
+        #     neg_mask = return_val < 0
+        #     hess_neg = hess[neg_mask]
+        #     print(f"{hess_neg=}")
+        #     print(f"{hess_neg.shape=}")
+        #     print(f"{wd=}")
+        #     red_diff = (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd) - beta2 * hess + (1.0 - beta2) * f
+        #     print("RED and NON-RED Difference")
+        #     print(f"{red_diff.mean()=}")
+        #     print(f"{red_diff.min()=}")
+        #     print(f"{red_diff.max()=}")
+        #     print(f"{(red_diff<0).sum()=}")
+
+        return return_val
 
     @staticmethod
     def _new_param_averages(param_avg, hess, momentum, lr, wd, clip_radius, debias, hess_init) -> Tensor:
