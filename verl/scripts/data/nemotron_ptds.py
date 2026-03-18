@@ -1,13 +1,21 @@
 import os
 import re
+import sys
 from pathlib import Path
 
 from datasets import concatenate_datasets, load_dataset
 from transformers import AutoTokenizer
 
-tok = AutoTokenizer.from_pretrained("allenai/OLMo-2-0425-1B-SFT")
+model_dict = {
+    "olmo2": "allenai/OLMo-2-0425-1B-SFT",
+    "qwm": "Qwen/Qwen2.5-Math-7B-Instruct",
+    "qwen2-5": "Qwen/Qwen2.5-7B-Instruct",
+}
+
+model_name = sys.argv[1] if len(sys.argv) > 1 else "qwm"
+
+tok = AutoTokenizer.from_pretrained(model_dict.get(model_name, model_name))
 NUM_WORKERS = len(os.sched_getaffinity(0))
-MAX_LEN = 4096 * 5
 pattern = re.compile(r"<think>\s*\S+[\s\S]*?</think>[\s\S]*?\S[\s\S]*")
 
 
