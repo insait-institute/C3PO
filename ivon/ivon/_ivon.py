@@ -221,12 +221,12 @@ class IVON(torch.optim.Optimizer):
                 if isinstance(p, DTensor):
                     p_local = p.to_local()
                     p_numel = p_local.numel()
-                    param_avgs.append(p_local.data.flatten().clone())
+                    param_avgs.append(p_local.data.flatten().clone().detach())
                     p_noise = noise_sample[goffset : goffset + p_numel]
                     p_local.data.add_(p_noise.view(p_local.shape))
                 else:
                     p_numel = p.numel()
-                    param_avgs.append(p.data.flatten().clone())
+                    param_avgs.append(p.data.flatten().clone().detach())
                     p_noise = noise_sample[goffset : goffset + p_numel]
                     p.data.add_(p_noise.view(p.shape))
 
@@ -262,7 +262,8 @@ class IVON(torch.optim.Optimizer):
                 b2,
                 group["weight_decay"],
             )
-
+            if (group["hess"] < 0).any():
+                print("Negative hessian detected")
             param_avg = self._new_param_averages(
                 param_avg,
                 group["hess"],
@@ -330,19 +331,19 @@ class IVON(torch.optim.Optimizer):
     def _new_hess(method, hess, avg_nxg, avg_gsq, pg_slice, ess, beta2, wd) -> Tensor:
         f = IVON._get_nll_hess(method, hess + wd, avg_nxg, avg_gsq, pg_slice) * ess
         return_val = beta2 * hess + (1.0 - beta2) * f + (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd)
-        # if (return_val < 0).any():
-        #     print("Negative return_val detected")
-        #     neg_mask = return_val < 0
-        #     hess_neg = hess[neg_mask]
-        #     print(f"{hess_neg=}")
-        #     print(f"{hess_neg.shape=}")
-        #     print(f"{wd=}")
-        #     red_diff = (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd) - beta2 * hess + (1.0 - beta2) * f
-        #     print("RED and NON-RED Difference")
-        #     print(f"{red_diff.mean()=}")
-        #     print(f"{red_diff.min()=}")
-        #     print(f"{red_diff.max()=}")
-        #     print(f"{(red_diff<0).sum()=}")
+        if (return_val < 0).any():
+            print("Negative return_val detected")
+            neg_mask = return_val < 0
+            hess_neg = hess[neg_mask]
+            print(f"{hess_neg=}")
+            print(f"{hess_neg.shape=}")
+            print(f"{wd=}")
+            red_diff = (0.5 * (1 - beta2) ** 2) * (hess - f).square() / (hess + wd) - beta2 * hess + (1.0 - beta2) * f
+            print("RED and NON-RED Difference")
+            print(f"{red_diff.mean()=}")
+            print(f"{red_diff.min()=}")
+            print(f"{red_diff.max()=}")
+            print(f"{(red_diff<0).sum()=}")
 
         return return_val
 
