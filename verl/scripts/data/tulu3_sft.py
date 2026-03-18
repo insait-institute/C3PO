@@ -20,7 +20,7 @@ from pathlib import Path
 import datasets
 from transformers import AutoTokenizer
 
-tok = AutoTokenizer.from_pretrained("allenai/OLMo-2-0425-1B-SFT")
+tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B-Instruct")
 
 
 def tokenize_and_filter(example):
@@ -39,4 +39,4 @@ if __name__ == "__main__":
     save_dir = Path(__file__).parents[2] / "data"
     save_dir.mkdir(exist_ok=True, parents=True)
     data = data.filter(tokenize_and_filter, num_proc=32)
-    data.to_parquet(save_dir / "tulu-3-sft-olmo-2-mixture-0225.parquet")
+    data.to_parquet(save_dir / "qwm-tulu-3-sft-olmo-2-mixture-0225.parquet")
