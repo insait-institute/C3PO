@@ -78,7 +78,7 @@ def _compute_response_info(batch: DataProto) -> dict[str, Any]:
     )
 
 
-def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str, Any]:
+def compute_data_metrics(batch: DataProto, use_critic: bool = True, granular_score_keys: list[str] = []) -> dict[str, Any]:
     """
     Computes various metrics from a batch of data for PPO training.
 
@@ -89,6 +89,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     Args:
         batch: A DataProto object containing batch data with token-level scores, rewards, advantages, etc.
         use_critic: Whether to include critic-specific metrics. Defaults to True.
+        granular_score_keys: List of keys to compute granular metrics for. Defaults to [].
 
     Returns:
         A dictionary of metrics including:
@@ -103,7 +104,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
             - num_turns/mean, max, min: Statistics about the number of multi-turn conversations
     """
     sequence_score = batch.batch["token_level_scores"].sum(-1)
-    sequence_reward = batch.batch["token_level_rewards"].sum(-1)
+    # sequence_reward = batch.batch["token_level_rewards"].sum(-1)
 
     advantages = batch.batch["advantages"]
     returns = batch.batch["returns"]
@@ -123,15 +124,15 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     non_aborted_mask = ~aborted_mask
 
     non_aborted_sequence_score = sequence_score[non_aborted_mask]
-    non_aborted_sequence_reward = sequence_reward[non_aborted_mask]
+    # non_aborted_sequence_reward = sequence_reward[non_aborted_mask]
 
     score_mean = torch.mean(non_aborted_sequence_score).detach().item()
     score_max = torch.max(non_aborted_sequence_score).detach().item()
     score_min = torch.min(non_aborted_sequence_score).detach().item()
 
-    reward_mean = torch.mean(non_aborted_sequence_reward).detach().item()
-    reward_max = torch.max(non_aborted_sequence_reward).detach().item()
-    reward_min = torch.min(non_aborted_sequence_reward).detach().item()
+    # reward_mean = torch.mean(non_aborted_sequence_reward).detach().item()
+    # reward_max = torch.max(non_aborted_sequence_reward).detach().item()
+    # reward_min = torch.min(non_aborted_sequence_reward).detach().item()
 
     valid_adv = torch.masked_select(advantages, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
@@ -151,11 +152,13 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         non_aborted_response_length_mean = torch.mean(non_aborted_response_length).detach().item()
         non_aborted_response_length_max = torch.max(non_aborted_response_length).detach().item()
         non_aborted_response_length_min = torch.min(non_aborted_response_length).detach().item()
-        non_aborted_response_length_clip_ratio = (
-            torch.mean(torch.eq(non_aborted_response_length, max_response_length).float()).detach().item()
-        )
+        non_aborted_response_length_clip_ratio = torch.mean(torch.eq(non_aborted_response_length, max_response_length).float()).detach().item()
     else:
         raise ValueError("All samples are aborted, this should not happen.")
+    granular_scores = {}
+    if granular_score_keys:
+        for k in granular_score_keys:
+            granular_scores[k] = torch.Tensor([x[k] for x in batch.non_tensor_batch["reward_extra_info"]])
 
     metrics = {
         # score
@@ -163,17 +166,17 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "critic/score/max": score_max,
         "critic/score/min": score_min,
         # reward
-        "critic/rewards/mean": reward_mean,
-        "critic/rewards/max": reward_max,
-        "critic/rewards/min": reward_min,
+        # "critic/rewards/mean": reward_mean,
+        # "critic/rewards/max": reward_max,
+        # "critic/rewards/min": reward_min,
         # adv
         "critic/advantages/mean": torch.mean(valid_adv).detach().item(),
         "critic/advantages/max": torch.max(valid_adv).detach().item(),
         "critic/advantages/min": torch.min(valid_adv).detach().item(),
         # returns
-        "critic/returns/mean": torch.mean(valid_returns).detach().item(),
-        "critic/returns/max": torch.max(valid_returns).detach().item(),
-        "critic/returns/min": torch.min(valid_returns).detach().item(),
+        # "critic/returns/mean": torch.mean(valid_returns).detach().item(),
+        # "critic/returns/max": torch.max(valid_returns).detach().item(),
+        # "critic/returns/min": torch.min(valid_returns).detach().item(),
         **(
             {
                 # values
@@ -186,13 +189,14 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
             if use_critic
             else {}
         ),
+        **({f"critic/{k}/mean": torch.mean(v).detach().item() for k, v in granular_scores.items()}),
+        **({f"critic/{k}/max": torch.max(v).detach().item() for k, v in granular_scores.items()}),
+        **({f"critic/{k}/min": torch.min(v).detach().item() for k, v in granular_scores.items()}),
         # response length
         "response_length/mean": torch.mean(response_length).detach().item(),
         "response_length/max": torch.max(response_length).detach().item(),
         "response_length/min": torch.min(response_length).detach().item(),
-        "response_length/clip_ratio": torch.mean(torch.eq(response_length, max_response_length).float())
-        .detach()
-        .item(),
+        "response_length/clip_ratio": torch.mean(torch.eq(response_length, max_response_length).float()).detach().item(),
         # response length (non-aborted only)
         # These statistics exclude aborted samples to avoid skew from zeros
         "response_length_non_aborted/mean": non_aborted_response_length_mean,
@@ -260,10 +264,7 @@ def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> di
 
     return {
         **{f"timing_s/{name}": value for name, value in timing_raw.items()},
-        **{
-            f"timing_per_token_ms/{name}": timing_raw[name] * 1000 / num_tokens_of_section[name]
-            for name in set(num_tokens_of_section.keys()) & set(timing_raw.keys())
-        },
+        **{f"timing_per_token_ms/{name}": timing_raw[name] * 1000 / num_tokens_of_section[name] for name in set(num_tokens_of_section.keys()) & set(timing_raw.keys())},
     }
 
 
@@ -367,9 +368,7 @@ def compute_variance_proxy_metrics(batch: DataProto, gradient_norm: float = None
         rollout_is_weights_scalar = verl_F.masked_mean(rollout_is_weights, response_mask, axis=-1)
         # Recover original W (before IS correction was applied in line 657)
         # Clamp to avoid division by zero when IS weights are zero
-        w_original = verl_F.masked_sum(
-            w_per_timestep / torch.clamp((rollout_is_weights**2).detach(), min=1e-10), response_mask, axis=-1
-        )
+        w_original = verl_F.masked_sum(w_per_timestep / torch.clamp((rollout_is_weights**2).detach(), min=1e-10), response_mask, axis=-1)
         # Clamp W to avoid negative values (which would cause NaN in sqrt)
         w_original = torch.clamp(w_original, min=0.0)
         # Proxy 2 for off-policy: E[ρ̄² × A² × W]
@@ -390,9 +389,7 @@ def compute_variance_proxy_metrics(batch: DataProto, gradient_norm: float = None
         if batch_size > 1:
             proxy3_pure_noise = (1.0 / (batch_size - 1)) * (proxy2_total_power - proxy1_signal_strength)
             # Ensure non-negative (can be negative due to numerical errors)
-            proxy3_pure_noise = max(
-                0.0, proxy3_pure_noise.item() if torch.is_tensor(proxy3_pure_noise) else proxy3_pure_noise
-            )
+            proxy3_pure_noise = max(0.0, proxy3_pure_noise.item() if torch.is_tensor(proxy3_pure_noise) else proxy3_pure_noise)
 
     # Decompose into components for analysis
     expected_a_squared = (advantages_scalar**2).mean()
@@ -401,9 +398,7 @@ def compute_variance_proxy_metrics(batch: DataProto, gradient_norm: float = None
     metrics.update(
         {
             # Proxy 1: Signal Strength ||ḡ||²
-            "variance_proxy/proxy1_signal_strength": (
-                proxy1_signal_strength if proxy1_signal_strength is not None else 0.0
-            ),
+            "variance_proxy/proxy1_signal_strength": (proxy1_signal_strength if proxy1_signal_strength is not None else 0.0),
             # Proxy 2: Total Power E[||ĝ_τ||²]
             "variance_proxy/proxy2_total_power": proxy2_total_power.detach().item(),
             # Proxy 3: Pure Noise - Variance of Mean Vector
@@ -466,9 +461,7 @@ def bootstrap_metric(
             metric_results[fn_idx, boot_idx] = reduce_fn(sample)
 
     # compute mean and std for each metric function
-    result = [
-        (float(np.mean(metric_results[fn_idx])), float(np.std(metric_results[fn_idx]))) for fn_idx in range(n_fns)
-    ]
+    result = [(float(np.mean(metric_results[fn_idx])), float(np.std(metric_results[fn_idx]))) for fn_idx in range(n_fns)]
     return result
 
 
@@ -488,11 +481,7 @@ def calc_maj_val(data: list[dict[str, Any]], vote_key: str, val_key: str) -> flo
         The value associated with the most common vote.
 
     Example:
-        >>> data = [
-        ...     {"pred": "A", "val": 0.9},
-        ...     {"pred": "B", "val": 0.8},
-        ...     {"pred": "A", "val": 0.7}
-        ... ]
+        >>> data = [{"pred": "A", "val": 0.9}, {"pred": "B", "val": 0.8}, {"pred": "A", "val": 0.7}]
         >>> calc_maj_val(data, vote_key="pred", val_key="val")
         0.9  # Returns the first "val" for the majority vote "A"
     """
@@ -508,9 +497,7 @@ def calc_maj_val(data: list[dict[str, Any]], vote_key: str, val_key: str) -> flo
     return maj_val
 
 
-def process_validation_metrics(
-    data_sources: list[str], sample_uids: list[str], infos_dict: dict[str, list[Any]], seed: int = 42
-) -> dict[str, dict[str, dict[str, float]]]:
+def process_validation_metrics(data_sources: list[str], sample_uids: list[str], infos_dict: dict[str, list[Any]], seed: int = 42) -> dict[str, dict[str, dict[str, float]]]:
     """
     Process validation metrics into a structured format with statistical analysis.
 
@@ -627,9 +614,7 @@ def process_validation_metrics(
                         # compute maj metrics
                         if has_pred:
                             # create vote_data
-                            vote_data = [
-                                {"val": val, "pred": pred} for val, pred in zip(var_vals, pred_vals, strict=True)
-                            ]
+                            vote_data = [{"val": val, "pred": pred} for val, pred in zip(var_vals, pred_vals, strict=True)]
                             # compute maj metrics
                             [(maj_n_mean, maj_n_std)] = bootstrap_metric(
                                 data=vote_data,

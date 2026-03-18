@@ -1591,7 +1591,8 @@ class RayPPOTrainer:
                     }
                 )
                 # collect metrics
-                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                granular_score_keys = [x for x in batch.non_tensor_batch["reward_extra_info"][0].keys() if x.endswith("_score")]
+                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic, granular_score_keys=granular_score_keys))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
