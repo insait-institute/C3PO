@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from math import pow
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 import torch
 import torch.distributed as dist
@@ -111,7 +111,6 @@ class IVON(torch.optim.Optimizer):
         self.state["avg_grad"] = None
         self.state["avg_nxg"] = None
         self.state["avg_gsq"] = None
-        self.state["param_avgs"] = None
         self.state["noise"] = None
 
     def _init_buffers(self):
@@ -122,15 +121,13 @@ class IVON(torch.optim.Optimizer):
 
     @contextmanager
     def sampled_params(self, train: bool = False):
-        param_avg, noise = self._sample_params()
+        noise = self._sample_params()
         yield
-        self._restore_param_average(train, param_avg, noise)
+        self._restore_param_average(train, noise)
 
-    def _restore_param_average(self, train: bool, param_avg: Tensor = None, noise: Tensor = None):
+    def _restore_param_average(self, train: bool, noise: Tensor = None):
         if not self._is_noised:
             return
-        if param_avg is None:
-            param_avg = self.state["param_avgs"]
         if noise is None:
             noise = self.state["noise"]
         param_grads = []
@@ -148,13 +145,13 @@ class IVON(torch.optim.Optimizer):
                     current_numel = p.numel()
 
                 p_slice = slice(offset, offset + current_numel)
-                restore_data = param_avg[p_slice]
+                noise_slice = noise[p_slice]
 
                 if isinstance(p, DTensor):
                     local_tensor = p.to_local()
-                    local_tensor.data.copy_(restore_data.view(local_tensor.shape))
+                    local_tensor.data.sub_(noise_slice.view(local_tensor.shape))
                 else:
-                    p.data.copy_(restore_data.view(p.shape))
+                    p.data.sub_(noise_slice.view(p.shape))
 
                 if train:
                     if p.requires_grad:
@@ -203,11 +200,10 @@ class IVON(torch.optim.Optimizer):
         dist.all_reduce(self.state["avg_nxg"])
         self.state["avg_nxg"].div_(world_size)
 
-    def _sample_params(self) -> Tuple[Tensor, Tensor]:
+    def _sample_params(self) -> Tensor:
         if self._is_noised:
-            return self.state["param_avgs"], self.state["noise"]
+            return self.state["noise"]
         noise_samples = []
-        param_avgs = []
         offset = 0
         for group in self.param_groups:
             gnumel = group["local_numel"]
@@ -221,12 +217,10 @@ class IVON(torch.optim.Optimizer):
                 if isinstance(p, DTensor):
                     p_local = p.to_local()
                     p_numel = p_local.numel()
-                    param_avgs.append(p_local.data.flatten().clone().detach())
                     p_noise = noise_sample[goffset : goffset + p_numel]
                     p_local.data.add_(p_noise.view(p_local.shape))
                 else:
                     p_numel = p.numel()
-                    param_avgs.append(p.data.flatten().clone().detach())
                     p_noise = noise_sample[goffset : goffset + p_numel]
                     p.data.add_(p_noise.view(p.shape))
 
@@ -235,9 +229,8 @@ class IVON(torch.optim.Optimizer):
             assert goffset == gnumel
         assert offset == self._local_numel
         self._is_noised = True
-        self.state["param_avgs"] = torch.cat(param_avgs, 0)
         self.state["noise"] = torch.cat(noise_samples, 0)
-        return self.state["param_avgs"], self.state["noise"]
+        return self.state["noise"]
 
     def _update(self):
         self.current_step += 1
