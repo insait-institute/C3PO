@@ -12,7 +12,7 @@ experiment_name=${EXPNAME:-adamw-qwen2-5math-1b-sft-nmt}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
-TRAIN_DATA=$DATA_ROOT/nemotron_ptds.parquet
+TRAIN_DATA=$DATA_ROOT/nemotron_ptds_qwm.parquet
 EVAL_DATA=null
 MODEL_PATH=Qwen/Qwen2.5-Math-1.5B
 TOKENIZER_PATH=Qwen/Qwen2.5-Math-1.5B-Instruct

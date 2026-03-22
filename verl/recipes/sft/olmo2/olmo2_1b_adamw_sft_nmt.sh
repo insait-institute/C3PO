@@ -12,7 +12,7 @@ experiment_name=${EXPNAME:-adamw-olmo2-1b-sft-nmt}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
-TRAIN_DATA=$DATA_ROOT/nemotron_ptds.parquet
+TRAIN_DATA=$DATA_ROOT/nemotron_ptds_olmo2.parquet
 EVAL_DATA=null
 MODEL_PATH=allenai/OLMo-2-0425-1B
 TOKENIZER_PATH=allenai/OLMo-2-0425-1B-SFT
@@ -29,7 +29,7 @@ torchrun --nnodes=$nnodes \
     data.multiturn.enable=true \
     data.multiturn.messages_key=messages \
     data.tokenizer_path=$TOKENIZER_PATH \
-    data.micro_batch_size_per_gpu=8 \
+    data.micro_batch_size_per_gpu=4 \
     model.partial_pretrain=$MODEL_PATH \
     model.strategy=fsdp2 \
     model.use_liger=true \
