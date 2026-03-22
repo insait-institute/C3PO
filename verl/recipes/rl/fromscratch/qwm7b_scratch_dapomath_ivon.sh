@@ -37,7 +37,7 @@ experiment_name=${EXPNAME:-qwm7b-scratch-dapomath-ivon}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
-TRAIN_DATA=$DATA_ROOT/qwm-dapomath-train.parquet
+TRAIN_DATA=$DATA_ROOT/qwm-dapomath-base-train.parquet
 EVAL_DATA=null
 MODEL_PATH=Qwen/Qwen2.5-Math-7B
 SAVE_PATH=$SAVE_ROOT/$experiment_name

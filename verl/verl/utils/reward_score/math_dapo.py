@@ -203,14 +203,14 @@ def is_correct_strict_box(pred: str, gt: str, pause_tokens_index: Optional[list[
     if pause_tokens_index is not None:
         assert len(pause_tokens_index) == 4
         pred = pred[pause_tokens_index[-1] - 100 :]
-    else:
-        pred = pred[-100:]
+    # else:
+    #     pred = pred[-100:]
 
     # Extract and check the boxed answer
     boxed_pred = last_boxed_only_string(pred)
     extracted_pred = remove_boxed(boxed_pred) if boxed_pred is not None else None
 
-    return 1 if (extracted_pred == gt) else -1, extracted_pred
+    return (extracted_pred == gt), extracted_pred
 
 
 def verify(solution_str: str, answer: str, strict_box_verify: bool = False, pause_tokens_index: Optional[list[int]] = None) -> bool:
@@ -226,11 +226,8 @@ def verify(solution_str: str, answer: str, strict_box_verify: bool = False, paus
         True if the solution is correct, False otherwise
     """
     if strict_box_verify:
-        correct, pred = is_correct_strict_box(solution_str, answer, pause_tokens_index)
-        return correct == 1, pred
-
-    correct, pred = is_correct_minerva(solution_str, answer)
-    return correct, pred
+        return is_correct_strict_box(solution_str, answer, pause_tokens_index)
+    return is_correct_minerva(solution_str, answer)
 
 
 def verify_format_correctness(sol: str):
@@ -240,9 +237,9 @@ def verify_format_correctness(sol: str):
 
 
 def compute_score(
+    data_source: str,
     solution_str: str,
     ground_truth: str,
-    strict_box_verify: bool = True,
     pause_tokens_index: Optional[list[int]] = None,
 ) -> float:
     """Compute the reward score for a solution.
@@ -256,22 +253,22 @@ def compute_score(
     Returns:
         Reward score (1.0 for correct, 1.0 for format)
     """
-    # Limit solution length for efficiency
-    solution_str = solution_str[-300:]  # The longest answer in MATH-500 has 159 characters
+    if data_source in ["math_dapo_base"]:
+        strict_box_verify = False  # No box verification for base, uses minerva
+        format_correct = True  # don't check format for base models
+    else:
+        strict_box_verify = True  # Box verification for other datasets
+        format_correct = verify_format_correctness(solution_str)
 
     # Verify the solution
-    format_correct = verify_format_correctness(solution_str)
-    if not format_correct:
-        correct, pred = 0, None
-    else:
-        correct, pred = verify(solution_str.split("</think>")[-1], ground_truth, strict_box_verify, pause_tokens_index)
+    correct, pred = verify(solution_str.split("</think>")[-1], ground_truth, strict_box_verify, pause_tokens_index)
 
     correct_reward = 1 if correct else 0
     format_reward = 0 if format_correct else -1
-
-    return {
-        "score": correct_reward + format_reward,
-        "correctness_score": correct_reward,
-        "format_score": format_reward,
-        "pred": pred,
-    }
+    extra_info = {}
+    if data_source != "math_dapo_base":
+        extra_info = {
+            "correctness_score": correct_reward,
+            "format_score": format_reward,
+        }
+    return {"score": correct_reward + format_reward, "pred": pred, **extra_info}
