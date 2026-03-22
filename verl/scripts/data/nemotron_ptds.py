@@ -50,4 +50,4 @@ if __name__ == "__main__":
     ds_all = concatenate_datasets([ds[k] for k in ds])
     ds_all = ds_all.add_column("idx", [f"nmt_{i}" for i in range(len(ds_all))])
     ds_all = ds_all.select_columns(["idx", "messages", "category"])
-    ds_all.to_parquet(save_dir / "nemotron_ptds.parquet")
+    ds_all.to_parquet(save_dir / f"nemotron_ptds_{model_name.split('/')[-1]}.parquet")
