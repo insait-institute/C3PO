@@ -25,6 +25,11 @@ def replace_answer_prompt(example):
     return example
 
 
+def edit_data_source(example):
+    example["data_source"] = "math_dapo_instruct"
+    return example
+
+
 def tokenize_and_filter(example):
     prompt = tok.apply_chat_template(
         example["prompt"],
@@ -43,5 +48,6 @@ df = df.drop_duplicates("idx", keep="first").drop("idx", axis=1)
 ds = Dataset.from_pandas(df)
 ds = ds.map(replace_answer_prompt, num_proc=NUM_WORKERS)
 ds = ds.filter(tokenize_and_filter, num_proc=NUM_WORKERS)
+ds = ds.map(edit_data_source, num_proc=NUM_WORKERS)
 save_dir = Path(__file__).parents[2] / "data"
 ds.to_parquet(save_dir / "qwm-dapomath-train.parquet")
