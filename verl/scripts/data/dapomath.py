@@ -5,7 +5,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
 NUM_WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else 1
-tok = AutoTokenizer.from_pretrained("allenai/OLMo-2-0425-1B-SFT")
+tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-7B-Instruct")
 
 
 def replace_answer_prompt(example):
@@ -44,4 +44,4 @@ ds = Dataset.from_pandas(df)
 ds = ds.map(replace_answer_prompt, num_proc=NUM_WORKERS)
 ds = ds.filter(tokenize_and_filter, num_proc=NUM_WORKERS)
 save_dir = Path(__file__).parents[2] / "data"
-ds.to_parquet(save_dir / "olmo-dapomath-train.parquet")
+ds.to_parquet(save_dir / "qwm-dapomath-train.parquet")

@@ -330,14 +330,17 @@ class TaskRunner:
             is_train=True,
             max_samples=config.data.get("train_max_samples", -1),
         )
-        val_dataset = create_rl_dataset(
-            config.data.val_files,
-            config.data,
-            tokenizer,
-            processor,
-            is_train=False,
-            max_samples=config.data.get("val_max_samples", -1),
-        )
+        if config.data.get("val_files") is None:
+            val_dataset = None
+        else:
+            val_dataset = create_rl_dataset(
+                config.data.val_files,
+                config.data,
+                tokenizer,
+                processor,
+                is_train=False,
+                max_samples=config.data.get("val_max_samples", -1),
+            )
         train_sampler = create_rl_sampler(config.data, train_dataset)
         # Initialize the PPO trainer.
         trainer = RayPPOTrainer(
