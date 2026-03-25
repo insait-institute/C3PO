@@ -106,6 +106,7 @@ class FSDPOptimizerConfig(OptimizerConfig):
     num_cycles: float = 0.5
     override_optimizer_config: Optional[dict] = None
     optimizer_load_path: Optional[str] = None
+    ivon_config: Optional[dict] = None
 
     def __post_init__(self):
         if self.warmup_style is not None:
@@ -187,7 +188,6 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
-    _, _ = optimizer_args.pop("ess_schedule", None), optimizer_args.pop("min_ess", None)
     try:
         module = importlib.import_module(config.optimizer_impl)
         optimizer_cls = getattr(module, config.optimizer)
@@ -203,8 +203,7 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         for group in optimizer.param_groups:
             group["initial_lr"] = config.lr
             group["lr"] = config.lr
-            if "ess" in config.override_optimizer_config:
-                group["ess"] = config.override_optimizer_config["ess"]
+            group["ess"] = config.ivon_config.ess
             group["weight_decay"] = config.weight_decay
 
     return optimizer

@@ -51,3 +51,13 @@ override_optimizer_config: null
 
 # Load optimizer state from checkpoint
 optimizer_load_path: null
+
+ivon_config:
+  ess: 1e8
+  hess_init: 0.001
+  clip_radius: 1e-3
+  rescale_lr: True
+  sync: false
+  ess_schedule: constant
+  min_ess_ratio: 0.1
+  min_ess: 1e7

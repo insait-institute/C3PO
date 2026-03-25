@@ -26,7 +26,7 @@ else
     CLIP_COV_LINE=""
 fi
 
-ESS=${ESS:-1}
+ESS=${ESS:-1e8}
 ESS_SCHEDULE=${ESS_SCHEDULE:-constant}
 
 
@@ -76,7 +76,12 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.1 \
     actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
     actor_rollout_ref.actor.optim.clip_grad=1.0 \
-    actor_rollout_ref.actor.optim.override_optimizer_config="{ess:1e8,hess_init:0.001,clip_radius:1e-3,rescale_lr:True,sync:false,initial_ess_scale:$ESS,ess_schedule:$ESS_SCHEDULE,min_ess_scale:0}" \
+    actor_rollout_ref.actor.optim.ivon_config.ess=$ESS \
+    actor_rollout_ref.actor.optim.ivon_config.hess_init=0.001 \
+    actor_rollout_ref.actor.optim.ivon_config.clip_radius=1e-3 \
+    actor_rollout_ref.actor.optim.ivon_config.rescale_lr=True \
+    actor_rollout_ref.actor.optim.ivon_config.sync=false \
+    actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
     +actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
