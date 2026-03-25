@@ -185,6 +185,14 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
     elif "ivon" in optimizer_name_lower:
         optimizer_args["beta1"] = config.betas[0]
         optimizer_args["beta2"] = config.betas[1]
+        optimizer_args["ess"] = config.ivon_config.ess
+        optimizer_args["hess_init"] = config.ivon_config.hess_init
+        optimizer_args["hess_approx"] = config.ivon_config.hess_approx
+        optimizer_args["clip_radius"] = config.ivon_config.clip_radius
+        optimizer_args["sync"] = config.ivon_config.sync
+        optimizer_args["debias"] = config.ivon_config.debias
+        optimizer_args["rescale_lr"] = config.ivon_config.rescale_lr
+        optimizer_args["mc_samples"] = config.ivon_config.mc_samples
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
@@ -203,8 +211,11 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         for group in optimizer.param_groups:
             group["initial_lr"] = config.lr
             group["lr"] = config.lr
-            group["ess"] = config.ivon_config.ess
             group["weight_decay"] = config.weight_decay
+            group["beta1"] = config.betas[0]
+            group["beta2"] = config.betas[1]
+            group["ess"] = config.ivon_config.ess
+            group["clip_radius"] = config.ivon_config.clip_radius
 
     return optimizer
 

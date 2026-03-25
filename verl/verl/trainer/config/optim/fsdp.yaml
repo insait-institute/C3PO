@@ -55,9 +55,12 @@ optimizer_load_path: null
 ivon_config:
   ess: 1e8
   hess_init: 0.001
-  clip_radius: 1e-3
+  hess_approx: price
   rescale_lr: True
   sync: false
+  mc_samples: 1
+  clip_radius: 1e-3
+  debias: True
   ess_schedule: constant
   min_ess_ratio: 0.1
   min_ess: 1e7
