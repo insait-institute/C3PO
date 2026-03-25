@@ -187,8 +187,7 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
-    initial_ess_scale = optimizer_args.pop("initial_ess_scale", 1.0)
-    _, _ = optimizer_args.pop("ess_schedule", None), optimizer_args.pop("min_ess_scale", None)
+    _, _ = optimizer_args.pop("ess_schedule", None), optimizer_args.pop("min_ess", None)
     try:
         module = importlib.import_module(config.optimizer_impl)
         optimizer_cls = getattr(module, config.optimizer)
@@ -204,7 +203,9 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         for group in optimizer.param_groups:
             group["initial_lr"] = config.lr
             group["lr"] = config.lr
-            group["ess"] *= initial_ess_scale
+            if "ess" in config.override_optimizer_config:
+                group["ess"] = config.override_optimizer_config["ess"]
+            group["weight_decay"] = config.weight_decay
 
     return optimizer
 
