@@ -7,12 +7,10 @@ from transformers import AutoTokenizer
 
 NUM_WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else 1
 mapping = {
-    "olmo3-base": "allenai/Olmo-3-1025-7B",
-    "qwen2-5-base": "Qwen/Qwen2.5-Math-7B",
-    "olmo3-instruct": "allenai/Olmo-3-7B-Instruct-DPO",
-    "qwen2-5-instruct": "Qwen/Qwen2.5-Math-7B-Instruct",
+    "olmo3": "allenai/Olmo-3-7B-Instruct-DPO",
+    "qwm": "Qwen/Qwen2.5-Math-7B",
 }
-model = sys.argv[1] if len(sys) > 1 else "olmo3-base"
+model = sys.argv[1] if len(sys.argv) > 1 else "olmo3"
 tok = AutoTokenizer.from_pretrained(mapping[model])
 
 
@@ -41,4 +39,4 @@ ds = ds.filter(tokenize_and_filter, num_proc=NUM_WORKERS)
 ds = ds.map(edit_data_source, num_proc=NUM_WORKERS)
 
 save_dir = Path(__file__).parents[2] / "data"
-ds.to_parquet(save_dir / f"{model}-dapomath-train.parquet")
+ds.to_parquet(save_dir / f"{model}-base-dapomath-train.parquet")
