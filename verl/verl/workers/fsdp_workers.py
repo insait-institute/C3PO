@@ -571,8 +571,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 raise NotImplementedError(f"LR scheduler type {lr_scheduler_type} is not supported")
 
             log_gpu_memory_usage(f"After {role} optimizer init", logger=logger)
-            if self.rank == 0 and optim_config.optimizer.lower() == "ivon":
-                print(f"Built {role} optimizer with config: {actor_optimizer.param_groups[0]}")
         else:
             actor_optimizer = None
             actor_lr_scheduler = None

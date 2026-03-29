@@ -45,17 +45,18 @@ def default_compute_score(
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)
-    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500"]:
-        from . import math_reward
+    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500", "math500"]:
+        # from . import math_reward
 
-        res = math_reward.compute_score(solution_str, ground_truth)
+        # res = math_reward.compute_score(solution_str, ground_truth)
         # [Optional] Math-Verify Integration
         # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
         # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.
         # To use it, override the `compute_score` function with the following implementation:
 
-        # from . import math_verify
-        # res = math_verify.compute_score(solution_str, ground_truth)
+        from . import math_verify
+
+        res = math_verify.compute_score(solution_str, ground_truth)
     elif data_source in ["math_dapo", "math", "math_dapo_reasoning", "math_dapo_instruct", "math_dapo_base"] or data_source.startswith("aime"):
         from . import math_dapo
 

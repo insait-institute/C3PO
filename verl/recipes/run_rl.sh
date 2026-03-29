@@ -1,0 +1,218 @@
+#!/bin/bash
+set -x
+
+# --- 1. CONFIGURATION / PARAMETERS ---
+# Model Mapping Logic
+MODEL_NAME=${MODEL_NAME:-"olmo3"}   
+MODEL_TYPE=${MODEL_TYPE:-"base"}    
+DEFAULT_TOKENIZER_PATH=null
+
+if [ "$MODEL_NAME" == "olmo3" ]; then
+    if [ "$MODEL_TYPE" == "base" ]; then
+        MODEL_PATH="allenai/Olmo-3-1025-7B"
+        DEFAULT_TOKENIZER_PATH="allenai/Olmo-3-7B-Think-DPO"
+    else
+        MODEL_PATH="allenai/Olmo-3-7B-Think-DPO"
+    fi
+elif [ "$MODEL_NAME" == "qwm" ]; then
+    if [ "$MODEL_TYPE" == "base" ]; then
+        MODEL_PATH="Qwen/Qwen2.5-Math-7B"
+    else
+        MODEL_PATH="Qwen/Qwen2.5-Math-7B-Instruct"
+    fi
+else
+    MODEL_PATH=${MODEL_PATH:-"allenai/Olmo-3-1025-7B"}
+    DEFAULT_TOKENIZER_PATH="allenai/Olmo-3-7B-Think-DPO"
+fi
+TOKENIZER_PATH=${TOKENIZER_PATH:-$DEFAULT_TOKENIZER_PATH}
+
+
+# Basic Training Params
+OPTIMIZER=${OPTIMIZER:-"adamw"}   
+DATA_NAME=${DATA_NAME:-"dapomath"}
+METHOD=${METHOD:-"grpo"}       
+
+# Hyperparameters based on MODEL_TYPE and OPTIMIZER
+if [ "$MODEL_TYPE" == "instruct" ]; then
+    if [ "$OPTIMIZER" == "ivon" ]; then
+        DEFAULT_LR=0.1
+        DEFAULT_WD=1e-6
+    else
+        DEFAULT_LR=5e-7
+        DEFAULT_WD=1e-1
+    fi
+else
+    if [ "$OPTIMIZER" == "ivon" ]; then
+        DEFAULT_LR=0.5
+        DEFAULT_WD=1e-6
+    else
+        DEFAULT_LR=1e-6
+        DEFAULT_WD=1e-1
+    fi
+fi
+
+# Initial parameter assignment
+LR=${LR:-$DEFAULT_LR}
+WD=${WD:-$DEFAULT_WD}
+KL_COEF=${KL_COEF:-0}
+ENTROPY_COEF=${ENTROPY_COEF:-0}
+CLIP_LOW=${CLIP_LOW:-0.2}
+CLIP_HIGH=${CLIP_HIGH:-0.2}
+KL_COV_RATIO=${KL_COV_RATIO:--1}
+PPO_KL_COEF=${PPO_KL_COEF:--1}
+CLIP_COV_RATIO=${CLIP_COV_RATIO:--1}
+CLIP_COV_LB=${CLIP_COV_LB:--1}
+CLIP_COV_UB=${CLIP_COV_UB:--1}
+
+if [ "$OPTIMIZER" == "ivon" ]; then
+    BETAS=${BETAS:-"[0.9,0.9999]"}
+    ESS=${ESS:-1e8}
+    ESS_SCHEDULE=${ESS_SCHEDULE:-"constant"}
+else
+    BETAS=${BETAS:-"[0.9,0.999]"}
+fi
+
+# --- 2. METHOD & EXPERIMENT NAMING ---
+EXPNAME=${EXPNAME:-"run_${MODEL_NAME}_${MODEL_TYPE}_${OPTIMIZER}_${DATA_NAME}"}
+
+if [ "$OPTIMIZER" == "ivon" ]; then
+    EXPNAME="${EXPNAME}-ESS${ESS}"
+fi
+
+# Apply Method-specific overrides and name updates
+if [ "$METHOD" == "grpo_cliphigh" ]; then
+    CLIP_HIGH=0.5
+    EXPNAME="${EXPNAME}-CLIPHIGH${CLIP_HIGH}"
+elif [ "$METHOD" == "grpo_klcov" ]; then
+    KL_COV_RATIO=0.2
+    PPO_KL_COEF=1
+    EXPNAME="${EXPNAME}-KLCOV${KL_COV_RATIO}-PPOKL${PPO_KL_COEF}"
+elif [ "$METHOD" == "grpo_entloss" ]; then
+    ENTROPY_COEF=5e-3
+    EXPNAME="${EXPNAME}-ENTCOEF${ENTROPY_COEF}"
+elif [ "$METHOD" == "grpo_clipcov" ]; then
+    CLIP_LOW=1
+    CLIP_HIGH=1
+    CLIP_COV_RATIO=0.0002
+    CLIP_COV_LB=1.0
+    CLIP_COV_UB=5.0
+    EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
+fi
+
+# --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
+# Handle KL_Cov/Clip_Cov logic
+KL_COV_LINE=""
+if [ "$KL_COV_RATIO" != "-1" ] && [ "$PPO_KL_COEF" != "-1" ]; then
+    KL_COV_LINE="actor_rollout_ref.actor.kl_ctrl.kl_cov_ratio=$KL_COV_RATIO actor_rollout_ref.actor.policy_loss.ppo_kl_coef=$PPO_KL_COEF"
+fi
+
+CLIP_COV_LINE=""
+if [ "$CLIP_COV_RATIO" != "-1" ] && [ "$CLIP_COV_LB" != "-1" ] && [ "$CLIP_COV_UB" != "-1" ]; then
+    CLIP_COV_LINE="actor_rollout_ref.actor.policy_loss.clip_cov_ratio=$CLIP_COV_RATIO actor_rollout_ref.actor.policy_loss.clip_cov_lb=$CLIP_COV_LB actor_rollout_ref.actor.policy_loss.clip_cov_ub=$CLIP_COV_UB"
+fi
+
+# Optimizer args
+OPT_ARGS=""
+if [ "$OPTIMIZER" == "ivon" ]; then
+    OPT_ARGS="
+        actor_rollout_ref.actor.optim.optimizer=IVON \
+        actor_rollout_ref.actor.optim.optimizer_impl=ivon \
+        actor_rollout_ref.actor.optim.ivon_config.ess=$ESS \
+        actor_rollout_ref.actor.optim.ivon_config.hess_init=0.001 \
+        actor_rollout_ref.actor.optim.ivon_config.clip_radius=1e-3 \
+        actor_rollout_ref.actor.optim.ivon_config.rescale_lr=True \
+        actor_rollout_ref.actor.optim.ivon_config.sync=false \
+        actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
+        actor_rollout_ref.actor.calculate_entropy=$([[ "$ESS_SCHEDULE" =~ "adaptive" ]] && echo "True" || echo "False") \
+    "
+else
+    OPT_ARGS="actor_rollout_ref.actor.optim.optimizer=AdamW"
+fi
+
+CHAT_TEMPLATE_ARG=""
+if [ "$MODEL_NAME" == "olmo3" ] && [ "$MODEL_TYPE" == "base" ]; then
+    SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+    TEMPLATE_FILE="${SCRIPT_DIR}/olmo3_chat_template.jinja"
+    if [ -f "$TEMPLATE_FILE" ]; then
+        # Read file, remove newlines to keep the CLI command valid
+        TEMPLATE_STR=$(cat "$TEMPLATE_FILE" | tr -d '\n' | sed 's/"/\\"/g')
+        CHAT_TEMPLATE_ARG="actor_rollout_ref.model.custom_chat_template=\"$TEMPLATE_STR\""
+    fi
+fi
+
+# --- 4. PATHS & ENV ---
+nnodes=1
+nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
+project_name=VeRL-RL
+
+DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
+SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
+TRAIN_DATA=$DATA_ROOT/${MODEL_NAME}-${MODEL_TYPE}-${DATA_NAME}-train.parquet
+EVAL_DATA=$DATA_ROOT/math_evals.parquet
+SAVE_PATH=$SAVE_ROOT/$EXPNAME
+
+# --- 5. EXECUTION ---
+PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
+    algorithm.adv_estimator=grpo \
+    algorithm.kl_ctrl.kl_coef=$KL_COEF \
+    data.train_files=$TRAIN_DATA \
+    data.val_files=$EVAL_DATA \
+    data.max_prompt_length=1024 \
+    data.max_response_length=3072 \
+    data.train_batch_size=32 \
+    data.shuffle=True \
+    actor_rollout_ref.model.path=$MODEL_PATH \
+    actor_rollout_ref.model.tokenizer_path=$TOKENIZER_PATH \
+    actor_rollout_ref.model.enable_activation_offload=True \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.actor.strategy=fsdp2 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
+    actor_rollout_ref.actor.use_dynamic_bsz=True \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=25000 \
+    actor_rollout_ref.actor.grad_clip=1.0 \
+    actor_rollout_ref.actor.clip_ratio_low=$CLIP_LOW \
+    actor_rollout_ref.actor.clip_ratio_high=$CLIP_HIGH \
+    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.entropy_coeff=$ENTROPY_COEF \
+    actor_rollout_ref.actor.kl_loss_coef=$KL_COEF \
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+    actor_rollout_ref.actor.shuffle=True \
+    actor_rollout_ref.actor.optim.betas=$BETAS \
+    actor_rollout_ref.actor.optim.weight_decay=$WD \
+    actor_rollout_ref.actor.optim.clip_grad=1.0 \
+    actor_rollout_ref.actor.optim.lr=$LR \
+    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.1 \
+    actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
+    $OPT_ARGS \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.ref.fsdp_config.param_offload=False \
+    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=25000 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.enforce_eager=False \
+    actor_rollout_ref.rollout.free_cache_engine=False \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.3 \
+    actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
+    actor_rollout_ref.rollout.temperature=1.0 \
+    actor_rollout_ref.rollout.n=16 \
+    actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=3072 \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
+    actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
+    actor_rollout_ref.rollout.val_kwargs.do_sample=true \
+    trainer.default_local_dir=$SAVE_PATH \
+    trainer.project_name=$project_name \
+    trainer.experiment_name=$EXPNAME \
+    trainer.n_gpus_per_node=$nproc_per_node \
+    trainer.logger='["console","wandb"]' \
+    trainer.critic_warmup=0 \
+    trainer.total_epochs=5 \
+    trainer.save_freq=0.2 \
+    trainer.test_freq=0.05 \
+    trainer.log_completions_freq=0.05 \
+    trainer.val_before_train=False \
+    trainer.nnodes=$nnodes \
+    trainer.n_gpus_per_node=$nproc_per_node \
+    $KL_COV_LINE \
+    $CLIP_COV_LINE
