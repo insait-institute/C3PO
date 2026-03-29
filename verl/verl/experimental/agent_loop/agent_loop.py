@@ -365,7 +365,8 @@ class AgentLoopWorker:
 
         model_path = config.actor_rollout_ref.model.path
         self.model_name = "/".join(model_path.split("/")[-2:])
-        local_path = copy_to_local(config.actor_rollout_ref.model.tokenizer_path)
+        local_path = config.actor_rollout_ref.model.tokenizer_path or config.actor_rollout_ref.model.path
+        local_path = copy_to_local(local_path)
         self.tokenizer = hf_tokenizer(local_path, trust_remote_code=True)
         self.processor = hf_processor(local_path, trust_remote_code=True)
 
