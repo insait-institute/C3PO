@@ -35,7 +35,7 @@ METHOD=${METHOD:-"grpo"}
 # Hyperparameters based on MODEL_TYPE and OPTIMIZER
 if [ "$MODEL_TYPE" == "instruct" ]; then
     if [ "$OPTIMIZER" == "ivon" ]; then
-        DEFAULT_LR=0.1
+        DEFAULT_LR=1.0
         DEFAULT_WD=1e-6
     else
         DEFAULT_LR=5e-7
@@ -43,7 +43,7 @@ if [ "$MODEL_TYPE" == "instruct" ]; then
     fi
 else
     if [ "$OPTIMIZER" == "ivon" ]; then
-        DEFAULT_LR=0.5
+        DEFAULT_LR=1.0
         DEFAULT_WD=1e-6
     else
         DEFAULT_LR=1e-6
@@ -73,7 +73,7 @@ else
 fi
 
 # --- 2. METHOD & EXPERIMENT NAMING ---
-EXPNAME=${EXPNAME:-"run_${MODEL_NAME}_${MODEL_TYPE}_${OPTIMIZER}_${DATA_NAME}"}
+EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}"}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-ESS${ESS}"
@@ -182,7 +182,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.weight_decay=$WD \
     actor_rollout_ref.actor.optim.clip_grad=1.0 \
     actor_rollout_ref.actor.optim.lr=$LR \
-    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.1 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.02 \
     actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
     $OPT_ARGS \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
@@ -201,6 +201,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=true \
+    critic.model.tokenizer_path=$TOKENIZER_PATH \
     trainer.default_local_dir=$SAVE_PATH \
     trainer.project_name=$project_name \
     trainer.experiment_name=$EXPNAME \

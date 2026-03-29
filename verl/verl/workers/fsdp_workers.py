@@ -550,7 +550,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 num_warmup_steps = int(num_warmup_steps_ratio * total_steps)
             self.total_steps = total_steps
             self.num_warmup_steps = num_warmup_steps
-            if optim_config.ivon_config.ess_schedule != "constant":
+            if optim_config.optimizer.lower() == "ivon":
                 self.initial_ess = optim_config.ivon_config.ess
                 self.max_entropy = None  # for adaptive schedules
 

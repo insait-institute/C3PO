@@ -233,9 +233,7 @@ class AgentLoopBase(ABC):
         """
         multi_modal_data = {}
         if self.processor is not None:
-            images, videos = await self.dataset_cls.process_vision_info(
-                messages, image_patch_size=self.processor.image_processor.patch_size, config=self.dataset_config
-            )
+            images, videos = await self.dataset_cls.process_vision_info(messages, image_patch_size=self.processor.image_processor.patch_size, config=self.dataset_config)
             if images is not None:
                 multi_modal_data["images"] = images
             if videos is not None:
@@ -367,7 +365,7 @@ class AgentLoopWorker:
 
         model_path = config.actor_rollout_ref.model.path
         self.model_name = "/".join(model_path.split("/")[-2:])
-        local_path = copy_to_local(config.actor_rollout_ref.model.path)
+        local_path = copy_to_local(config.actor_rollout_ref.model.tokenizer_path)
         self.tokenizer = hf_tokenizer(local_path, trust_remote_code=True)
         self.processor = hf_processor(local_path, trust_remote_code=True)
 
@@ -445,28 +443,20 @@ class AgentLoopWorker:
         if max_samples_per_worker is not None:
             unique_sample_indices = np.unique(index)
             if max_samples_per_worker < len(unique_sample_indices):
-                selected_samples = set(
-                    np.random.choice(unique_sample_indices, max_samples_per_worker, replace=False).tolist()
-                )
+                selected_samples = set(np.random.choice(unique_sample_indices, max_samples_per_worker, replace=False).tolist())
                 traced_indices = set(i for i in range(len(batch)) if index[i] in selected_samples)
             else:
                 traced_indices = set(range(len(batch)))
         else:
             traced_indices = set(range(len(batch)))
 
-        trajectory_info = await get_trajectory_info(
-            batch.meta_info.get("global_steps", -1), index.tolist(), batch.meta_info.get("validate", False)
-        )
+        trajectory_info = await get_trajectory_info(batch.meta_info.get("global_steps", -1), index.tolist(), batch.meta_info.get("validate", False))
 
         tasks = []
         for i in range(len(batch)):
             trace_this_sample = i in traced_indices
             kwargs = {k: v[i] for k, v in batch.non_tensor_batch.items()}
-            tasks.append(
-                asyncio.create_task(
-                    self._run_agent_loop(sampling_params, trajectory_info[i], trace=trace_this_sample, **kwargs)
-                )
-            )
+            tasks.append(asyncio.create_task(self._run_agent_loop(sampling_params, trajectory_info[i], trace=trace_this_sample, **kwargs)))
         outputs = await asyncio.gather(*tasks)
 
         output = self._postprocess(outputs)
@@ -490,9 +480,7 @@ class AgentLoopWorker:
             name="agent_loop",
             trace=trace,
         ):
-            assert agent_name in _agent_loop_registry, (
-                f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
-            )
+            assert agent_name in _agent_loop_registry, f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
 
             agent_loop_config = _agent_loop_registry[agent_name]
             agent_loop = hydra.utils.instantiate(
@@ -593,9 +581,7 @@ class AgentLoopWorker:
 
             # Add boundary checks for robustness
             if start_pos < 0 or end_pos > total_length:
-                raise ValueError(
-                    f"Invalid position range: start_pos={start_pos}, end_pos={end_pos}, total_length={total_length}"
-                )
+                raise ValueError(f"Invalid position range: start_pos={start_pos}, end_pos={end_pos}, total_length={total_length}")
 
             routed_experts[:, start_pos:end_pos] = experts_tensor.unsqueeze(0)
 
@@ -867,11 +853,7 @@ class AgentLoopManager:
             * self.config.actor_rollout_ref.rollout.data_parallel_size
             * self.config.actor_rollout_ref.rollout.pipeline_model_parallel_size
         )
-        world_size = (
-            self.worker_group.world_size
-            if self.worker_group
-            else self.config.trainer.n_gpus_per_node * self.config.trainer.nnodes
-        )
+        world_size = self.worker_group.world_size if self.worker_group else self.config.trainer.n_gpus_per_node * self.config.trainer.nnodes
         num_replicas = world_size // rollout_world_size
 
         rollout_config = self.config.actor_rollout_ref.rollout
@@ -889,12 +871,7 @@ class AgentLoopManager:
         if self.worker_group and rollout_config.name != "trtllm":
             self._run_all([server.init_hybrid(self.worker_group) for server in self.rollout_replicas])
         elif self.worker_group and rollout_config.name == "trtllm":
-            self._run_all(
-                [
-                    server.init_hybrid_colocated(self.worker_group, rollout_resource_pool)
-                    for server in self.rollout_replicas
-                ]
-            )
+            self._run_all([server.init_hybrid_colocated(self.worker_group, rollout_resource_pool) for server in self.rollout_replicas])
         else:
             self._run_all([server.init_standalone() for server in self.rollout_replicas])
 
@@ -920,9 +897,7 @@ class AgentLoopManager:
             self.agent_loop_workers.append(
                 self.agent_loop_workers_class.options(
                     name=f"agent_loop_worker_{i}" + f"_{uuid4().hex[:8]}",
-                    scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
-                        node_id=node_id, soft=True
-                    ),
+                    scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(node_id=node_id, soft=True),
                 ).remote(self.config, self.server_handles, self.reward_loop_worker_handles)
             )
 
@@ -937,12 +912,7 @@ class AgentLoopManager:
         """
 
         chunkes = prompts.chunk(len(self.agent_loop_workers))
-        outputs = ray.get(
-            [
-                worker.generate_sequences.remote(chunk)
-                for worker, chunk in zip(self.agent_loop_workers, chunkes, strict=True)
-            ]
-        )
+        outputs = ray.get([worker.generate_sequences.remote(chunk) for worker, chunk in zip(self.agent_loop_workers, chunkes, strict=True)])
         output = DataProto.concat(outputs)
 
         # calculate performance metrics

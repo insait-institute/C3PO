@@ -266,7 +266,7 @@ def compute_score(
     correct_reward = 1 if correct else 0
     format_reward = 0 if format_correct else -1
     extra_info = {}
-    if data_source != "math_dapo_base":
+    if data_source not in ["math_dapo_base", "math_dapo_instruct"]:
         extra_info = {
             "correctness_score": correct_reward,
             "format_score": format_reward,

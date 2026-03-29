@@ -296,7 +296,6 @@ class TaskRunner:
         # Download the checkpoint from HDFS to the local machine.
         # `use_shm` determines whether to use shared memory, which could lead to faster model loading if turned on
         tokenizer_path = copy_to_local(config.actor_rollout_ref.model.tokenizer_path, use_shm=config.actor_rollout_ref.model.get("use_shm", False))
-
         # Instantiate the tokenizer and processor.
         from verl.utils import hf_processor, hf_tokenizer
 
