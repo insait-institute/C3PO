@@ -37,23 +37,27 @@ if [ "$MODEL_TYPE" == "instruct" ]; then
     if [ "$OPTIMIZER" == "ivon" ]; then
         DEFAULT_LR=1.0
         DEFAULT_WD=1e-6
+        DEFAULT_MAX_TOKEN_LEN=25000  # IVON is heavier on memory
     else
-        DEFAULT_LR=5e-7
+        DEFAULT_LR=1e-6
         DEFAULT_WD=1e-1
+        DEFAULT_MAX_TOKEN_LEN=30000
     fi
 else
     if [ "$OPTIMIZER" == "ivon" ]; then
         DEFAULT_LR=1.0
         DEFAULT_WD=1e-6
+        DEFAULT_MAX_TOKEN_LEN=25000
     else
         DEFAULT_LR=1e-6
         DEFAULT_WD=1e-1
+        DEFAULT_MAX_TOKEN_LEN=30000
     fi
 fi
-
 # Initial parameter assignment
 LR=${LR:-$DEFAULT_LR}
 WD=${WD:-$DEFAULT_WD}
+MAX_TOKEN_LEN=${MAX_TOKEN_LEN:-$DEFAULT_MAX_TOKEN_LEN}
 KL_COEF=${KL_COEF:-0}
 ENTROPY_COEF=${ENTROPY_COEF:-0}
 CLIP_LOW=${CLIP_LOW:-0.2}
@@ -66,14 +70,14 @@ CLIP_COV_UB=${CLIP_COV_UB:--1}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
-    ESS=${ESS:-1e8}
+    ESS=${ESS:-1e9}
     ESS_SCHEDULE=${ESS_SCHEDULE:-"constant"}
 else
     BETAS=${BETAS:-"[0.9,0.999]"}
 fi
 
 # --- 2. METHOD & EXPERIMENT NAMING ---
-EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}"}
+EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}-LR_${LR}"}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-ESS${ESS}"
@@ -169,7 +173,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.strategy=fsdp2 \
     actor_rollout_ref.actor.ppo_mini_batch_size=32 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=25000 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$MAX_TOKEN_LEN \
     actor_rollout_ref.actor.grad_clip=1.0 \
     actor_rollout_ref.actor.clip_ratio_low=$CLIP_LOW \
     actor_rollout_ref.actor.clip_ratio_high=$CLIP_HIGH \
@@ -188,12 +192,12 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
-    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=25000 \
+    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$MAX_TOKEN_LEN \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.enforce_eager=False \
-    actor_rollout_ref.rollout.free_cache_engine=False \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.3 \
+    actor_rollout_ref.rollout.free_cache_engine=True \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.n=16 \
@@ -209,8 +213,8 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb"]' \
     trainer.critic_warmup=0 \
     trainer.total_epochs=5 \
-    trainer.save_freq=0.2 \
-    trainer.test_freq=0.05 \
+    trainer.save_freq=0.05 \
+    trainer.test_freq=0 \
     trainer.log_completions_freq=0.05 \
     trainer.val_before_train=False \
     trainer.nnodes=$nnodes \
