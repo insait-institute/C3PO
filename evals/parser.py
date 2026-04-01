@@ -499,7 +499,6 @@ def check_answers(ans1, ans2):
         return bool(ans1.equals(ans2))
     except Exception as e:
         logger.warning(f"Error comparing answers {ans1} and {ans2}: {e}")
-        breakpoint()
         return False
 
 

@@ -7,18 +7,5 @@ data:
   names: "all"
   add_open_think: false
 wandb:
-  enable: false
-  project: "math-eval-v1"
-sampling:
-  aime24:
-    temperature: 0.6
-    top_p: 0.95
-    max_tokens: 2048
-  aime25:
-    temperature: 0.6
-    top_p: 0.95
-    max_tokens: 2048
-  aime26:
-    temperature: 0.6
-    top_p: 0.95
-    max_tokens: 2048
+  enable: true
+  project: "math_evals"

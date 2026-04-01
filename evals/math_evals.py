@@ -5,7 +5,7 @@ import math
 import os
 from collections import Counter
 from typing import Any, Dict, List
-
+import sys
 import constants
 import numpy as np
 import sympy
@@ -26,7 +26,7 @@ ch.setLevel(logging.INFO)
 log.addHandler(ch)
 
 NUM_WORKERS = len(os.sched_getaffinity(0))
-
+sys.set_int_max_str_digits(0)
 
 class Config(dict):
     """A dictionary that allows attribute-style access"""
@@ -137,9 +137,9 @@ class MathEvalEngine:
     def _get_sampling_params(self, source_name: str) -> SamplingParams:
         """Merge default constants with hydra overrides and per-dataset settings."""
         base_params = constants.DEFAULT_SAMPLING_PARAMS.copy()
-
-        dataset_overrides = self.cfg.sampling.get(source_name, {})
-        base_params.update(dataset_overrides)
+        if 'sampling' in self.cfg:
+            dataset_overrides = self.cfg.sampling.get(source_name, {})
+            base_params.update(dataset_overrides)
 
         return SamplingParams(**base_params)
 
@@ -180,23 +180,21 @@ class MathEvalEngine:
 
             # Parse all predictions
             parsed_preds = [extract_boxed_answer_parse(p)[0] for p in preds]
-
+    
             # 1. Individual sample scores
             sample_scores = [check_answers(ref_parsed, p) for p in parsed_preds]
             all_sample_scores.append(sample_scores)
-
+    
             # 2. Self-Consistency (Majority Vote)
-            # We group by the parsed value. Since parsed values might be complex objects,
-            # we use their string representation or a hashable form if available.
             if parsed_preds:
-                # Count frequencies of the actual parsed answers
-                # Note: math_verify objects usually have a consistent string/repr for equivalent values
-                counts = Counter([str(p) for p in parsed_preds])
+                # OPTIMIZATION: Compute strings once to avoid redundant large-int processing
+                str_preds = [str(p) for p in parsed_preds]
+                
+                counts = Counter(str_preds)
                 majority_answer_str = counts.most_common(1)[0][0]
-
-                # Find an original parsed object that matches the majority string to verify
-                # (since verify() needs the object, not the string)
-                representative_idx = [str(p) for p in parsed_preds].index(majority_answer_str)
+    
+                # Find the first object that produced this string
+                representative_idx = str_preds.index(majority_answer_str)
                 is_majority_correct = check_answers(ref_parsed, parsed_preds[representative_idx])
                 majority_scores.append(is_majority_correct)
             else:
@@ -309,24 +307,26 @@ class MathEvalEngine:
             bon_str = " | ".join(relevant_bon)
 
             log.info(f"{source:15} | Avg: {m['avg']:.2%} | Maj: {m['maj']:.2%} | {bon_str}")
-
+            
         if self.cfg.wandb.enable:
+            save_name = self.cfg.model.path
+            if save_name.count('/') == 1:
+                save_name = save_name.split('/')[-1]
+            else:
+                save_name = '--'.join(self.cfg.model.path.split('/')[-3:-1])
+            wandb.init(project=self.cfg.wandb.project, name=save_name, config=dict(self.cfg))
             wandb.log(logs)
+            wandb.finish()
 
 
 def main():
     cfg = load_config_with_overrides()
-    if cfg.wandb.enable:
-        wandb.init(project=cfg.wandb.project, name=f"{cfg.model.path.split('/')[-1]}", config=dict(cfg))
-
     engine = MathEvalEngine(cfg)
     dataset = engine.load_and_prepare_data()
     predictions = engine.run_inference(dataset)
     scores = engine.evaluate(predictions, dataset["answer"])
 
-    engine.report_metrics(dataset, scores)
-    if cfg.wandb.enable:
-        wandb.finish()
+    engine.report_metrics(dataset, scores)        
 
 
 if __name__ == "__main__":

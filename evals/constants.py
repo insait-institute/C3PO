@@ -14,10 +14,11 @@ PROMPT_TEMPLATE = "You are an expert mathematics problem solver. Think carefully
 
 # Default Sampling Parameters
 DEFAULT_SAMPLING_PARAMS = {
-    "temperature": 0.0,
-    "max_tokens": 2048,
-    "top_p": 1.0,
-    "n": 1,
+    "temperature": 0.6,
+    "max_tokens": 3072,
+    "top_p": 0.95,
+    "top_k": 50,
+    "n": 16,
 }
 
 manual_mapper = {
