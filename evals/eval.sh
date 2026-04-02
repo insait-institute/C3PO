@@ -1,11 +1,20 @@
 #!/bin/bash
-source $HOME/.bashrc
+export HOME=$VV_WORKDIR
+source $HOME/init.sh
 micromamba activate verlivon
 
+# --- CONFIGURATION ---
 CONFIG_FILE="eval_config.yaml"
+CHECKLIST="completed_runs.txt"
 # ---------------------
 
-# 1. Handle Step Input (all or a specific number)
+echo ">>> Syncing with WandB to fetch updated run list..."
+python sync_wandb.py
+
+# Ensure file exists even if sync failed or projects were empty
+touch "$CHECKLIST"
+
+# 1. Handle Step Input
 if [[ -z "$1" || "$1" == "all" ]]; then
     STEP_PATTERN="*"
 else
@@ -13,7 +22,7 @@ else
 fi
 shift
 
-# 2. Define Models list (remaining arguments or all in bayesrl)
+# 2. Define Models list
 if [ $# -gt 0 ]; then
     MODELS=("$@")
 else
@@ -22,7 +31,6 @@ fi
 
 echo ">>> Starting Evaluation Pipeline"
 echo ">>> Step Pattern: $STEP_PATTERN"
-echo ">>> Models: ${MODELS[*]}"
 
 for MODEL in "${MODELS[@]}"; do
     MODEL_BASE_PATH="$WORK/bayesrl/$MODEL"
@@ -32,32 +40,42 @@ for MODEL in "${MODELS[@]}"; do
         continue
     fi
 
-    # Find the huggingface subdirectories inside the global_step folders
-    # We look specifically for the 'huggingface' folder created by your merger script
+    # Locate the HF subdirectories
     HF_DIRS=($(find "$MODEL_BASE_PATH" -maxdepth 2 -type d -path "*/global_step_${STEP_PATTERN}/huggingface" | sort -V))
 
     if [ ${#HF_DIRS[@]} -eq 0 ]; then
-        echo "No merged HuggingFace models found for $MODEL at step $STEP_PATTERN"
         continue
     fi
 
     for HF_PATH in "${HF_DIRS[@]}"; do
-        # Extract the step name for logging/wandb (e.g., global_step_580)
         STEP_NAME=$(basename "$(dirname "$HF_PATH")")
-        
+        RUN_NAME="${MODEL}_${STEP_NAME}"
+
+        # CHECK AGAINST CACHED LIST
+        if grep -Fxq "$RUN_NAME" "$CHECKLIST"; then
+            echo ">>> [SKIP] $RUN_NAME already exists in WandB."
+            continue
+        fi
+
         echo "========================================================"
-        echo "EVALUATING: $MODEL | $STEP_NAME"
+        echo "EVALUATING: $RUN_NAME"
         echo "PATH: $HF_PATH"
         echo "========================================================"
 
         # Run the evaluation script
-        # We override model.path and wandb.name via CLI arguments
         python math_evals.py \
-            --config eval_config.yaml \
+            --config "$CONFIG_FILE" \
             model.path="$HF_PATH" \
-            wandb.name="${MODEL}_${STEP_NAME}"
+            wandb.name="$RUN_NAME"
             
-        echo "Finished eval for $MODEL at $STEP_NAME"
+        # If successful, append to local file so we don't need to re-sync 
+        # with the cloud for every single iteration within this loop.
+        if [ $? -eq 0 ]; then
+            echo "$RUN_NAME" >> "$CHECKLIST"
+            echo "Successfully finished: $RUN_NAME"
+        else
+            echo "!!! FAILED: $RUN_NAME (Check logs)"
+        fi
     done
 done
 
