@@ -3,9 +3,10 @@ import ast
 import logging
 import math
 import os
+import sys
 from collections import Counter
 from typing import Any, Dict, List
-import sys
+
 import constants
 import numpy as np
 import sympy
@@ -27,6 +28,7 @@ log.addHandler(ch)
 
 NUM_WORKERS = len(os.sched_getaffinity(0))
 sys.set_int_max_str_digits(0)
+
 
 class Config(dict):
     """A dictionary that allows attribute-style access"""
@@ -137,7 +139,7 @@ class MathEvalEngine:
     def _get_sampling_params(self, source_name: str) -> SamplingParams:
         """Merge default constants with hydra overrides and per-dataset settings."""
         base_params = constants.DEFAULT_SAMPLING_PARAMS.copy()
-        if 'sampling' in self.cfg:
+        if "sampling" in self.cfg:
             dataset_overrides = self.cfg.sampling.get(source_name, {})
             base_params.update(dataset_overrides)
 
@@ -147,7 +149,11 @@ class MathEvalEngine:
         log.info(f"Starting batch inference for {len(dataset)} prompts...")
 
         prompts = list(dataset["prompt"])
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+        tokenizer_name = self.model_name
+        if self.model_name == "allenai/Olmo-3-1025-7B" or "olmo3-base" in self.model_name:
+            tokenizer_name = "allenai/Olmo-3-7B-Think-DPO"
+
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
         add_generation_prompt = prompts[0][-1]["role"] != "assistant"
         prompts = tokenizer.apply_chat_template(
             prompts,
@@ -180,19 +186,19 @@ class MathEvalEngine:
 
             # Parse all predictions
             parsed_preds = [extract_boxed_answer_parse(p)[0] for p in preds]
-    
+
             # 1. Individual sample scores
             sample_scores = [check_answers(ref_parsed, p) for p in parsed_preds]
             all_sample_scores.append(sample_scores)
-    
+
             # 2. Self-Consistency (Majority Vote)
             if parsed_preds:
                 # OPTIMIZATION: Compute strings once to avoid redundant large-int processing
                 str_preds = [str(p) for p in parsed_preds]
-                
+
                 counts = Counter(str_preds)
                 majority_answer_str = counts.most_common(1)[0][0]
-    
+
                 # Find the first object that produced this string
                 representative_idx = str_preds.index(majority_answer_str)
                 is_majority_correct = check_answers(ref_parsed, parsed_preds[representative_idx])
@@ -307,13 +313,13 @@ class MathEvalEngine:
             bon_str = " | ".join(relevant_bon)
 
             log.info(f"{source:15} | Avg: {m['avg']:.2%} | Maj: {m['maj']:.2%} | {bon_str}")
-            
+
         if self.cfg.wandb.enable:
             save_name = self.cfg.model.path
-            if save_name.count('/') == 1:
-                save_name = save_name.split('/')[-1]
+            if save_name.count("/") == 1:
+                save_name = save_name.split("/")[-1]
             else:
-                save_name = '--'.join(self.cfg.model.path.split('/')[-3:-1])
+                save_name = "--".join(self.cfg.model.path.split("/")[-3:-1])
             wandb.init(project=self.cfg.wandb.project, name=save_name, config=dict(self.cfg))
             wandb.log(logs)
             wandb.finish()
@@ -326,7 +332,7 @@ def main():
     predictions = engine.run_inference(dataset)
     scores = engine.evaluate(predictions, dataset["answer"])
 
-    engine.report_metrics(dataset, scores)        
+    engine.report_metrics(dataset, scores)
 
 
 if __name__ == "__main__":
