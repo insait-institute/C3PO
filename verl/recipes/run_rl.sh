@@ -72,6 +72,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
     ESS=${ESS:-1e9}
     ESS_SCHEDULE=${ESS_SCHEDULE:-"constant"}
+    MIN_ESS=${MIN_ESS:-1e9}
 else
     BETAS=${BETAS:-"[0.9,0.999]"}
 fi
@@ -103,6 +104,10 @@ elif [ "$METHOD" == "grpo_clipcov" ]; then
     EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
 fi
 
+if [ "$ESS_SCHEDULE" != "constant" ]; then
+    EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}-MINESS_${MINESS}"
+fi
+
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
 # Handle KL_Cov/Clip_Cov logic
 KL_COV_LINE=""
@@ -131,17 +136,6 @@ if [ "$OPTIMIZER" == "ivon" ]; then
     "
 else
     OPT_ARGS="actor_rollout_ref.actor.optim.optimizer=AdamW"
-fi
-
-CHAT_TEMPLATE_ARG=""
-if [ "$MODEL_NAME" == "olmo3" ] && [ "$MODEL_TYPE" == "base" ]; then
-    SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-    TEMPLATE_FILE="${SCRIPT_DIR}/olmo3_chat_template.jinja"
-    if [ -f "$TEMPLATE_FILE" ]; then
-        # Read file, remove newlines to keep the CLI command valid
-        TEMPLATE_STR=$(cat "$TEMPLATE_FILE" | tr -d '\n' | sed 's/"/\\"/g')
-        CHAT_TEMPLATE_ARG="actor_rollout_ref.model.custom_chat_template=\"$TEMPLATE_STR\""
-    fi
 fi
 
 # --- 4. PATHS & ENV ---
@@ -212,7 +206,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=$nproc_per_node \
     trainer.logger='["console","wandb"]' \
     trainer.critic_warmup=0 \
-    trainer.total_epochs=5 \
+    trainer.total_epochs=3 \
     trainer.save_freq=0.05 \
     trainer.test_freq=0 \
     trainer.log_completions_freq=0.05 \

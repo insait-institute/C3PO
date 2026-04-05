@@ -63,4 +63,4 @@ ivon_config:
   debias: True
   ess_schedule: constant
   min_ess_ratio: 0.1
-  min_ess: 1e7
+  min_ess: null
