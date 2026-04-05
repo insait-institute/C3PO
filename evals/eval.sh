@@ -1,9 +1,4 @@
 #!/bin/bash
-export HOME=$VV_WORKDIR
-source $HOME/init.sh
-micromamba activate verlivon
-
-# --- CONFIGURATION ---
 CONFIG_FILE="eval_config.yaml"
 CHECKLIST="completed_runs.txt"
 # ---------------------
