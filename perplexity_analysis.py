@@ -2,27 +2,17 @@ import os
 
 import matplotlib.pyplot as plt
 import torch
-from accelerate import Accelerator
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
 from ivon.ivon import IVON
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# 1. Initialize Accelerator FIRST
-accelerator = Accelerator()
-device = accelerator.device
+MODEL_ID = "Qwen/Qwen3-4B"
 
-MODEL_ID = "Qwen/Qwen3-8B"
-
-# 2. Load Tokenizer & Model
+# 1. Setup - Load once
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-# Use the accelerator's device explicitly to ensure GPUs don't fight over GPU 0
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_ID,
-    device_map={"": device},
-    torch_dtype=torch.bfloat16,  # Halves VRAM usage compared to float32
-)
+model = AutoModelForCausalLM.from_pretrained(MODEL_ID, device_map="auto")
 model.eval()
 
 
@@ -37,30 +27,25 @@ def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
 def get_perplexity(model, input_ids, labels):
     with torch.no_grad():
         outputs = model(input_ids, labels=labels)
-        return torch.exp(outputs.loss)
+        return torch.exp(outputs.loss).item()
 
 
-# 3. Setup Optimizers
-# Initialize IVON with the specific model parameters on the correct device
+def _quality(example):
+    return len(example["problem"]) > 200 and len(example["solution"]) > 200
+
+
 opt_scratch = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
-opt_sft = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
 
-# Load SFT state only if file exists
-try:
-    sft_state = _load_optim_state_dict(MODEL_ID)
-    opt_sft.load_state_dict(sft_state)
-    # Ensure state is moved to the specific GPU assigned to this process
-    for group in opt_sft.param_groups:
-        for key in ["momentum", "hess"]:
-            if key in group:
-                group[key] = group[key].to(device, dtype=torch.bfloat16)
-except Exception as e:
-    if accelerator.is_main_process:
-        print(f"Skipping SFT loading: {e}")
+# opt_sft = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
+# sft_state = _load_optim_state_dict(MODEL_ID)
+# opt_sft.load_state_dict(sft_state)
+# for group in opt_sft.param_groups:
+#     for key in ["momentum", "hess"]:
+#         group[key] = group[key].to(model.device)
 
-# 4. Data Preparation
 dataset = load_dataset("agentica-org/DeepScaleR-Preview-Dataset", split="train")
-dataset = dataset.shuffle(seed=42).select(range(40))
+dataset = dataset.filter(_quality)
+dataset = dataset.shuffle(seed=42).select(range(20))
 
 
 def preprocess(example):
@@ -68,7 +53,6 @@ def preprocess(example):
         {"role": "user", "content": f"Answer the following question:\n{example['problem']}"},
         {"role": "assistant", "content": "<think>\n\n</think>\n\n" + example["solution"]},
     ]
-
     prompt = tokenizer.apply_chat_template([full_seq[0]], tokenize=False, thinking=False, add_generation_prompt=True)
     full_text = tokenizer.apply_chat_template(full_seq, tokenize=False, thinking=False, add_generation_prompt=False)
 
@@ -77,59 +61,45 @@ def preprocess(example):
 
     labels = enc.input_ids.clone()
     labels[:, : prompt_enc.input_ids.shape[1]] = -100
+
     return {"input_ids": enc.input_ids, "labels": labels}
 
 
-dataset = dataset.map(preprocess, remove_columns=dataset.column_names)
-dataset.set_format(type="torch")
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=1)
+results = {"std": [], "scratch": [], "sft": []}
 
-# 5. Parallelize Everything
-model, opt_scratch, opt_sft, dataloader = accelerator.prepare(model, opt_scratch, opt_sft, dataloader)
+for example in tqdm(dataset):
+    processed = preprocess(example)
+    input_ids = processed["input_ids"].to(model.device)
+    labels = processed["labels"].to(model.device)
 
-results_local = {"std": [], "scratch": [], "sft": []}
+    results["std"].append(get_perplexity(model, input_ids, labels))
 
-# 6. Loop with unwrapped optimizers for sampling
-for batch in tqdm(dataloader, disable=not accelerator.is_local_main_process):
-    input_ids = batch["input_ids"]
-    labels = batch["labels"]
+    noise = opt_scratch._sample_params()
+    results["scratch"].append(get_perplexity(model, input_ids, labels))
+    opt_scratch._restore_param_average(train=False, noise=noise)
 
-    # Std PPL
-    results_local["std"].append(get_perplexity(model, input_ids, labels))
+    # noise_sft = opt_sft._sample_params()
+    # results["sft"].append(get_perplexity(model, input_ids, labels))
+    # opt_sft._restore_param_average(train=False, noise=noise_sft)
 
-    # IVON Sampling (Unwrap to access private sampling methods)
-    for opt_key, accel_opt in [("scratch", opt_scratch), ("sft", opt_sft)]:
-        raw_opt = accel_opt.optimizer  # Access underlying IVON object
+plt.figure(figsize=(10, 6))
+plt.boxplot(
+    [results["std"], results["scratch"], results["sft"]],
+    labels=["Standard", "IVON (Scratch)", "IVON (SFT)"],
+    patch_artist=True,
+    boxprops=dict(facecolor="lightblue"),
+    medianprops=dict(color="red"),
+)
+plt.ylabel("Perplexity")
+plt.title("Perplexity Distribution Comparison")
+plt.savefig("perplexity_boxplot.png")
 
-        # Sampling
-        noise = raw_opt._sample_params()
-        results_local[opt_key].append(get_perplexity(model, input_ids, labels))
-
-        # Cleanup memory immediately after use
-        raw_opt._restore_param_average(train=False, noise=noise)
-        del noise
-        torch.cuda.empty_cache()  # Helps prevent fragmentation during sampling
-
-# 7. Gather and Plot
-all_std = accelerator.gather(torch.stack(results_local["std"])).cpu().tolist()
-all_scratch = accelerator.gather(torch.stack(results_local["scratch"])).cpu().tolist()
-all_sft = accelerator.gather(torch.stack(results_local["sft"])).cpu().tolist()
-
-if accelerator.is_main_process:
-    final_results = {"std": all_std, "scratch": all_scratch, "sft": all_sft}
-
-    plt.figure(figsize=(10, 6))
-    plt.boxplot(
-        [final_results["std"], final_results["scratch"], final_results["sft"]],
-        labels=["Standard", "IVON (Scratch)", "IVON (SFT)"],
-        patch_artist=True,
-        boxprops=dict(facecolor="lightblue"),
-        medianprops=dict(color="red"),
-    )
-    plt.ylabel("Perplexity")
-    plt.title("Perplexity Distribution Comparison (Multi-GPU)")
-    plt.savefig("perplexity_boxplot.png")
-
-    for key in ["std", "scratch", "sft"]:
-        avg = sum(final_results[key]) / len(final_results[key])
-        print(f"Average {key.upper()} PPL: {avg:.4f}")
+print(f"Average Standard PPL: {sum(results['std']) / len(results['std']):.4f}")
+print(f"Average IVON Scratch PPL: {sum(results['scratch']) / len(results['scratch']):.4f}")
+# print(f"Average IVON SFT PPL: {sum(results['sft']) / len(results['sft']):.4f}")
+print(f"Min Standard PPL: {min(results['std']):.4f}")
+print(f"Min IVON Scratch PPL: {min(results['scratch']):.4f}")
+# print(f"Min IVON SFT PPL: {min(results['sft']):.4f}")
+print(f"Max Standard PPL: {max(results['std']):.4f}")
+print(f"Max IVON Scratch PPL: {max(results['scratch']):.4f}")
+# print(f"Max IVON SFT PPL: {max(results['sft']):.4f}")
