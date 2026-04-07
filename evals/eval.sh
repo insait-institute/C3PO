@@ -44,7 +44,7 @@ for MODEL in "${MODELS[@]}"; do
 
     for HF_PATH in "${HF_DIRS[@]}"; do
         STEP_NAME=$(basename "$(dirname "$HF_PATH")")
-        RUN_NAME="${MODEL}_${STEP_NAME}"
+        RUN_NAME="${MODEL}--${STEP_NAME}"
 
         # CHECK AGAINST CACHED LIST
         if grep -Fxq "$RUN_NAME" "$CHECKLIST"; then
