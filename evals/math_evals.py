@@ -14,6 +14,7 @@ import torch
 import yaml
 from datasets import Dataset, Value, concatenate_datasets, load_dataset
 from formatter import BaseFormatter, get_formatter_mapping
+from func_timeout import FunctionTimedOut, func_timeout
 from parser import check_answers, extract_boxed_answer_parse, parse_answer
 from transformers import AutoTokenizer
 
@@ -167,43 +168,66 @@ class MathEvalEngine:
         outputs = self.llm.generate(prompts, sampling_params_list)
         return [[res.text for res in output.outputs] for output in outputs]
 
-    def evaluate(self, predictions: List[List[str]], references: List[str]) -> Dict[str, Any]:
+    def evaluate(self, predictions: List[List[str]], references: List[str], timeout_seconds: float = 5.0) -> Dict[str, Any]:
         """
-        Verifies mathematical correctness and tracks parsed answers for Self-Consistency.
-        Returns a dict containing per-sample scores and the majority-voted correctness.
-
+        Verifies mathematical correctness with a per-sample timeout.
         """
         log.info("Scoring model responses...")
         all_sample_scores = []
         majority_scores = []
 
         for preds, ref in zip(predictions, references):
-            if ref is not None:
-                try:
-                    ref_parsed = sympy.Integer(int(ref))
-                except:  # noqa: E722
-                    ref_parsed = parse_answer(ref)[0]
+            sample_scores = []
+            parsed_preds = []
 
-            # Parse all predictions
-            parsed_preds = [extract_boxed_answer_parse(p)[0] for p in preds]
+            try:
+                # 1. Parse Reference with Timeout
+                if ref is not None:
+                    try:
+                        ref_parsed = func_timeout(timeout_seconds, sympy.Integer, args=(int(ref),))
+                    except:
+                        # Fallback to general parser
+                        ref_parsed = func_timeout(timeout_seconds, parse_answer, args=(ref,))[0]
+                else:
+                    ref_parsed = None
 
-            # 1. Individual sample scores
-            sample_scores = [check_answers(ref_parsed, p) for p in parsed_preds]
-            all_sample_scores.append(sample_scores)
+                # 2. Parse Predictions and Check Answers
+                for p in preds:
+                    try:
+                        # Combined parsing and checking under one timeout
+                        p_parsed = func_timeout(timeout_seconds, lambda x: extract_boxed_answer_parse(x)[0], args=(p,))
+                        is_correct = func_timeout(timeout_seconds, check_answers, args=(ref_parsed, p_parsed))
 
-            # 2. Self-Consistency (Majority Vote)
-            if parsed_preds:
-                # OPTIMIZATION: Compute strings once to avoid redundant large-int processing
-                str_preds = [str(p) for p in parsed_preds]
+                        parsed_preds.append(p_parsed)
+                        sample_scores.append(is_correct)
+                    except (FunctionTimedOut, Exception) as e:
+                        log.warning(f"Timeout or Error processing prediction: {e}")
+                        parsed_preds.append(None)
+                        sample_scores.append(False)
 
-                counts = Counter(str_preds)
-                majority_answer_str = counts.most_common(1)[0][0]
+                all_sample_scores.append(sample_scores)
 
-                # Find the first object that produced this string
-                representative_idx = str_preds.index(majority_answer_str)
-                is_majority_correct = check_answers(ref_parsed, parsed_preds[representative_idx])
-                majority_scores.append(is_majority_correct)
-            else:
+                # 3. Self-Consistency (Majority Vote)
+                # Filter out None values from failed parses
+                valid_parsed = [p for p in parsed_preds if p is not None]
+
+                if valid_parsed:
+                    str_preds = [str(p) for p in valid_parsed]
+                    counts = Counter(str_preds)
+                    majority_answer_str = counts.most_common(1)[0][0]
+
+                    # Find the representative object
+                    representative_idx = str_preds.index(majority_answer_str)
+                    # This check is usually fast because it was already computed in sample_scores
+                    # but we use the existing score to be safe.
+                    orig_idx = [i for i, x in enumerate(parsed_preds) if x is not None][representative_idx]
+                    majority_scores.append(sample_scores[orig_idx])
+                else:
+                    majority_scores.append(False)
+
+            except Exception as e:
+                log.error(f"Critical failure in sample evaluation: {e}")
+                all_sample_scores.append([False] * len(preds))
                 majority_scores.append(False)
 
         return {"sample_scores": all_sample_scores, "majority_scores": majority_scores}
