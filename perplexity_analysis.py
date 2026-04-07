@@ -7,11 +7,14 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 from ivon.ivon import IVON
 from scipy.stats import norm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
 from vllm import LLM, SamplingParams
 
+NUM_WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else 1
 MODEL_ID = sys.argv[1] if len(sys.argv) > 1 else "Qwen/Qwen3-4B"
 if not dist.is_initialized():
     dist.init_process_group(backend="nccl")
@@ -44,7 +47,30 @@ def calculate_perplexity(outputs, prompts, full_texts, tokenizer):
 
 
 def _quality(example):
-    return len(example["problem"]) > 200 and len(example["solution"]) > 200
+    return example["num_tokens"] < 1024
+
+
+def _domain_filter(example):
+    return example["domain"] == "math"
+
+
+def _preprocess(example):
+    example["messages"] = [
+        {"role": "user", "content": f"Answer the following question:\n{example['problem']}"},
+        {"role": "assistant", "content": example["deepseek_solution"], "reasoning_content": example["deepseek_reasoning"]},
+    ]
+    example["prompt"] = tokenizer.apply_chat_template(example["messages"][:1], tokenize=False, add_generation_prompt=True, thinking=True)
+    example["full_text"] = tokenizer.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False, thinking=True)
+    example["num_tokens"] = tokenizer.apply_chat_template(example["messages"], tokenize=True, return_dict=True, return_tensors="pt")["input_ids"].shape[1]
+    return example
+
+
+def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
+    if os.path.exists(path_or_repo):
+        path = os.path.join(path_or_repo, filename) if os.path.isdir(path_or_repo) else path_or_repo
+    else:
+        path = hf_hub_download(repo_id=path_or_repo, filename=filename)
+    return torch.load(path, map_location="cpu", mmap=True)
 
 
 if os.path.exists(CACHE_FILE):
@@ -65,24 +91,20 @@ else:
         trust_remote_code=True,
     )
 
-    dataset = load_dataset("agentica-org/DeepScaleR-Preview-Dataset", split="train")
-    dataset = dataset.filter(_quality).shuffle(seed=42).select(range(20))
+    dataset = load_dataset("open-thoughts/OpenThoughts-114k", "metadata", split="train")
+    dataset = dataset.filter(_domain_filter, num_proc=NUM_WORKERS).remove_columns(["test_cases", "starter_code"])
+    dataset = dataset.map(_preprocess, num_proc=NUM_WORKERS)
+    dataset = dataset.filter(_quality, num_proc=NUM_WORKERS)
+    print(f"[*] Filtered dataset to {len(dataset)} examples.")
+    dataset = dataset.shuffle(seed=42).select(range(20))
 
-    all_prompts = []
-    all_full_texts = []
-
-    for example in dataset:
-        full_seq = [
-            {"role": "user", "content": f"Answer the following question:\n{example['problem']}"},
-            {"role": "assistant", "content": example["solution"]},
-        ]
-        all_prompts.append(tokenizer.apply_chat_template([full_seq[0]], tokenize=False, add_generation_prompt=True, thinking=False))
-        all_full_texts.append(tokenizer.apply_chat_template(full_seq, tokenize=False, add_generation_prompt=False, thinking=False))
+    all_prompts = dataset["prompt"]
+    all_full_texts = dataset["full_text"]
 
     # --- 5. Execution ---
     opt_scratch = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
     sampling_params = SamplingParams(max_tokens=1, prompt_logprobs=1)
-    results = {"std": [], "scratch": []}
+    results = {"std": [], "scratch": [], "sft": []}
 
     # PHASE A: Standard Inference
     if rank == 0:
@@ -90,22 +112,64 @@ else:
     std_outputs = llm.generate(all_full_texts, sampling_params)
     results["std"] = calculate_perplexity(std_outputs, all_prompts, all_full_texts, tokenizer)
 
-    # PHASE B: IVON Sampling
+    # PHASE B: IVON Sampling (Scratch)
     if rank == 0:
-        print(f"\nAverage Standard PPL: {np.mean(results['std']):.4f}")
-        print("Running IVON Batch...")
+        print("Running IVON Scratch Batch...")
+    opt_scratch = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
     torch.manual_seed(42)
 
     with opt_scratch.sampled_params():
         llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
-
         for n, p in model.named_parameters():
             llm_model.load_weights([(n, p.data)])
 
         ivon_outputs = llm.generate(all_full_texts, sampling_params)
         results["scratch"] = calculate_perplexity(ivon_outputs, all_prompts, all_full_texts, tokenizer)
+
+    # Cleanup Scratch Optimizer to free memory
+    del opt_scratch
+    torch.cuda.empty_cache()
+
+    # PHASE C: IVON Sampling (SFT State)
+    opt_sft = None
+    try:
+        if rank == 0:
+            print("Loading SFT Optimizer States...")
+
+        # Initialize fresh optimizer for SFT
+        opt_sft = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
+        sft_state = _load_optim_state_dict(MODEL_ID)
+        opt_sft.load_state_dict(sft_state)
+
+        # Move states to GPU
+        for group in opt_sft.param_groups:
+            for key in ["momentum", "hess"]:
+                if key in group:
+                    group[key] = group[key].to("cuda", dtype=torch.bfloat16)
+
+        if rank == 0:
+            print("Running IVON SFT Batch...")
+
+        with opt_sft.sampled_params():
+            llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
+            for n, p in model.named_parameters():
+                llm_model.load_weights([(n, p.data)])
+
+            sft_outputs = llm.generate(all_full_texts, sampling_params)
+            results["sft"] = calculate_perplexity(sft_outputs, all_prompts, all_full_texts, tokenizer)
+
+    except Exception as e:
+        if rank == 0:
+            print(f"Skipping SFT loading or execution: {e}")
+        opt_sft = None
+
+    # --- Save and Plot ---
     with open(CACHE_FILE, "wb") as f:
         pickle.dump(results, f)
+    print(f"\nAverage Standard PPL: {np.mean(results['std']):.4f}")
+    print(f"Average IVON PPL: {np.mean(results['scratch']):.4f}")
+    if opt_sft:
+        print(f"Average SFT PPL: {np.mean(results['sft']):.4f}")
     print(f"--- Results saved to {CACHE_FILE} ---")
 
 print("[*] Generating distribution plots...")
@@ -113,10 +177,14 @@ print("[*] Generating distribution plots...")
 # Convert to Log-Perplexity (Loss) for better Normal Distribution fit
 log_std = np.log(results["std"])
 log_scratch = np.log(results["scratch"])
+if opt_sft:
+    log_sft = np.log(results["sft"])
 
 # Fit Normals
 mu_std, std_std = norm.fit(log_std)
 mu_ivon, std_ivon = norm.fit(log_scratch)
+if opt_sft:
+    mu_sft, std_sft = norm.fit(log_sft)
 
 # Create Plot
 plt.figure(figsize=(10, 6), dpi=120)
@@ -135,6 +203,12 @@ plt.fill_between(x, y_std, color="blue", alpha=0.15)
 y_ivon = norm.pdf(x, mu_ivon, std_ivon)
 plt.plot(x, y_ivon, "r-", lw=2.5, label=f"IVON Scratch (μ={mu_ivon:.2f}, σ={std_ivon:.2f})")
 plt.fill_between(x, y_ivon, color="red", alpha=0.15)
+
+if opt_sft:
+    # Plot SFT
+    y_sft = norm.pdf(x, mu_sft, std_sft)
+    plt.plot(x, y_sft, "g-", lw=2.5, label=f"IVON SFT (μ={mu_sft:.2f}, σ={std_sft:.2f})")
+    plt.fill_between(x, y_sft, color="green", alpha=0.15)
 
 plt.title("Distribution of Log-Perplexity (Model Loss)", fontsize=14, fontweight="bold")
 plt.xlabel("Log-Perplexity (Lower is better)", fontsize=12)
