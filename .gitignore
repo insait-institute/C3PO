@@ -129,3 +129,5 @@ log
 outputs
 .history
 **/evals/*.md
+
+perp_results
