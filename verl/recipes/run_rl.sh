@@ -104,7 +104,7 @@ elif [ "$METHOD" == "grpo_clipcov" ]; then
     EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
 fi
 
-if [ "$ESS_SCHEDULE" != "constant" ]; then
+if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ]; then
     EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}-MINESS_${MINESS}"
 fi
 
