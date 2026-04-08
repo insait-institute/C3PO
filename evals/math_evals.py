@@ -3,8 +3,10 @@ import ast
 import logging
 import math
 import os
+import pickle
 import sys
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, List
 
 import constants
@@ -354,8 +356,16 @@ def main():
     engine = MathEvalEngine(cfg)
     dataset = engine.load_and_prepare_data()
     predictions = engine.run_inference(dataset)
+    save_dir = Path(cfg.model.path)
+    if save_dir.exists():
+        with open(save_dir / "eval_predictions.pkl", "wb") as f:
+            pickle.dump(predictions, f)
+    else:
+        save_dir = Path(__file__).parents[0] / "eval_preds" / cfg.model.path
+        save_dir.mkdir(parents=True, exist_ok=True)
+        with open(save_dir / "eval_predictions.pkl", "wb") as f:
+            pickle.dump(predictions, f)
     scores = engine.evaluate(predictions, dataset["answer"])
-
     engine.report_metrics(dataset, scores)
 
 
