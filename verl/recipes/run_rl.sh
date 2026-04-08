@@ -72,7 +72,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
     ESS=${ESS:-1e9}
     ESS_SCHEDULE=${ESS_SCHEDULE:-"constant"}
-    MIN_ESS=${MIN_ESS:-1e9}
+    MIN_ESS=${MIN_ESS:-$ESS}
 else
     BETAS=${BETAS:-"[0.9,0.999]"}
 fi
@@ -133,6 +133,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.sync=false \
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
         actor_rollout_ref.actor.calculate_entropy=$([[ "$ESS_SCHEDULE" =~ "adaptive" ]] && echo "True" || echo "False") \
+        actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
     "
 else
     OPT_ARGS="actor_rollout_ref.actor.optim.optimizer=AdamW"
