@@ -20,12 +20,13 @@ elif [ "$MODEL_NAME" == "qwm" ]; then
     else
         MODEL_PATH="Qwen/Qwen2.5-Math-7B-Instruct"
     fi
+elif [ "$MODEL_NAME" == "qwm_nmtron" ]; then
+    MODEL_PATH="BayesRL/qwm7b_nmtron_ivon"
 else
-    MODEL_PATH=${MODEL_PATH:-"allenai/Olmo-3-1025-7B"}
-    DEFAULT_TOKENIZER_PATH="allenai/Olmo-3-7B-Think-DPO"
+    MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-Math-7B"}
 fi
 TOKENIZER_PATH=${TOKENIZER_PATH:-$DEFAULT_TOKENIZER_PATH}
-
+IVON_INIT_METHOD=${IVON_INIT_METHOD:-"scratch"} # scratch or trained
 
 # Basic Training Params
 OPTIMIZER=${OPTIMIZER:-"adamw"}   
@@ -81,7 +82,7 @@ fi
 EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}-LR_${LR}"}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
-    EXPNAME="${EXPNAME}-ESS${ESS}"
+    EXPNAME="${EXPNAME}-ESS${ESS}-IVONINIT_${IVON_INIT_METHOD}"
 fi
 
 # Apply Method-specific overrides and name updates
@@ -134,6 +135,9 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
     "
+    if [ "$IVON_INIT_METHOD" == "trained" ]; then
+        OPT_ARGS="${OPT_ARGS} actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH"
+    fi
 else
     OPT_ARGS="actor_rollout_ref.actor.optim.optimizer=AdamW"
 fi
