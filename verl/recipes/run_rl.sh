@@ -140,7 +140,9 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
     "
     if [ "$IVON_INIT_METHOD" == "trained" ]; then
-        OPT_ARGS="${OPT_ARGS} actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH"
+        OPT_ARGS="${OPT_ARGS} \
+            +actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH
+        "
     fi
 else
     OPT_ARGS="actor_rollout_ref.actor.optim.optimizer=AdamW"
