@@ -26,7 +26,7 @@ def main():
     args = parser.parse_args()
 
     # Determine sources
-    sources = ["HuggingFaceH4/aime_2024", "math-ai/aime25", "math-ai/aime26", "math-ai/math500"]
+    sources = ["HuggingFaceH4/aime_2024", "math-ai/aime25", "math-ai/aime26", "math-ai/math500", "math-ai/amc23", "math-ai/minervamath"]
     all_processed = []
 
     for path in sources:
@@ -36,6 +36,10 @@ def main():
             raw_ds = load_dataset(path, split="train")
         if "unique_id" in raw_ds.column_names:
             raw_ds = raw_ds.rename_columns({"unique_id": "id"})
+        if "question" in raw_ds.column_names:
+            raw_ds = raw_ds.rename_columns({"question": "problem"})
+        if "id" not in raw_ds.column_names:
+            raw_ds = raw_ds.add_column("id", ["" for i in range(len(raw_ds))])
         raw_ds = raw_ds.cast_column("id", Value("string"))
         raw_ds = raw_ds.select_columns(["id", "problem", "answer"])
         raw_ds = raw_ds.add_column("data_source", [path.split("/")] * len(raw_ds))
@@ -49,7 +53,6 @@ def main():
 
     data.to_parquet(save_dir / args.output)
     log.info("Done!")
-    breakpoint()
 
 
 if __name__ == "__main__":
