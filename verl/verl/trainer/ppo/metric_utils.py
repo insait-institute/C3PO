@@ -641,4 +641,15 @@ def process_validation_metrics(data_sources: list[str], sample_uids: list[str], 
         for var_name, metric2uid_vals in var2metric2uid_vals.items():
             for metric_name, uid_vals in metric2uid_vals.items():
                 data_src2var2metric2val[data_source][var_name][metric_name] = np.mean(uid_vals)
+
+    # Add "avg" data source: aggregate each metric across all data sources
+    avg_var2metric2vals = defaultdict(lambda: defaultdict(list))
+    for data_source, var2metric2val in data_src2var2metric2val.items():
+        for var_name, metric2val in var2metric2val.items():
+            for metric_name, val in metric2val.items():
+                avg_var2metric2vals[var_name][metric_name].append(val)
+    for var_name, metric2vals in avg_var2metric2vals.items():
+        for metric_name, vals in metric2vals.items():
+            data_src2var2metric2val["avg"][var_name][metric_name] = np.mean(vals)
+
     return data_src2var2metric2val

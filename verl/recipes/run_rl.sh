@@ -132,7 +132,6 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.rescale_lr=True \
         actor_rollout_ref.actor.optim.ivon_config.sync=false \
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
-        actor_rollout_ref.actor.calculate_entropy=$([[ "$ESS_SCHEDULE" =~ "adaptive" ]] && echo "True" || echo "False") \
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
     "
 else
@@ -154,6 +153,9 @@ SAVE_PATH=$SAVE_ROOT/$EXPNAME
 PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.kl_ctrl.kl_coef=$KL_COEF \
+    algorithm.rollout_correction.rollout_is=sequence \
+    algorithm.rollout_correction.bypass_mode=True \
+    algorithm.rollout_correction.loss_type=ppo_clip \
     data.train_files=$TRAIN_DATA \
     data.val_files=$EVAL_DATA \
     data.max_prompt_length=1024 \
@@ -186,6 +188,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     $OPT_ARGS \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.actor.calculate_entropy=True \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$MAX_TOKEN_LEN \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
@@ -194,12 +197,16 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.free_cache_engine=True \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
+    actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.n=16 \
+    actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=3072 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
-    actor_rollout_ref.rollout.val_kwargs.do_sample=true \
+    actor_rollout_ref.rollout.val_kwargs.top_k=50 \
+    actor_rollout_ref.rollout.val_kwargs.n=1 \
+    actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     critic.model.tokenizer_path=$TOKENIZER_PATH \
     trainer.default_local_dir=$SAVE_PATH \
     trainer.project_name=$project_name \
@@ -208,11 +215,12 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb"]' \
     trainer.critic_warmup=0 \
     trainer.total_epochs=3 \
-    trainer.save_freq=139 \
-    trainer.test_freq=0 \
-    trainer.log_completions_freq=139 \
+    trainer.save_freq=0.25 \
+    trainer.test_freq=0.05 \
+    trainer.log_completions_freq=0.05 \
     trainer.val_before_train=False \
     trainer.nnodes=$nnodes \
     trainer.n_gpus_per_node=$nproc_per_node \
+    trainer.validation_data_dir=$SAVE_PATH/eval_gens \
     $KL_COV_LINE \
     $CLIP_COV_LINE
