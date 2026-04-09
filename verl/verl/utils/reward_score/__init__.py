@@ -53,10 +53,9 @@ def default_compute_score(
         # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
         # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.
         # To use it, override the `compute_score` function with the following implementation:
+        from . import mathverify_verifier
 
-        from . import math_verify
-
-        res = math_verify.compute_score(solution_str, ground_truth)
+        res = mathverify_verifier.compute_score(solution_str, ground_truth)
     elif data_source in ["math_dapo", "math", "math_dapo_reasoning", "math_dapo_instruct", "math_dapo_base"] or data_source.startswith("aime"):
         from . import math_dapo
 

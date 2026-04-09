@@ -109,8 +109,8 @@ elif [ "$METHOD" == "grpo_clipcov" ]; then
     EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
 fi
 
-if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ]; then
-    EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}-MINESS_${MINESS}"
+if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ] && [ "$ESS_SCHEDULE" != "adaptive_2" ]; then
+    EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}-MINESS_${MIN_ESS}"
 fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---

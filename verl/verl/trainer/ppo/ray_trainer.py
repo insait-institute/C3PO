@@ -1278,7 +1278,9 @@ class RayPPOTrainer:
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.config.trainer.get("val_before_train", True):
+            self.checkpoint_manager.update_weights()
             val_metrics = self._validate()
+            self.checkpoint_manager.sleep_replicas()
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
