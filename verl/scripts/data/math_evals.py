@@ -42,7 +42,7 @@ def main():
             raw_ds = raw_ds.add_column("id", ["" for i in range(len(raw_ds))])
         raw_ds = raw_ds.cast_column("id", Value("string"))
         raw_ds = raw_ds.select_columns(["id", "problem", "answer"])
-        raw_ds = raw_ds.add_column("data_source", [path.split("/")] * len(raw_ds))
+        raw_ds = raw_ds.add_column("data_source", [path.split("/")[-1]] * len(raw_ds))
         all_processed.append(raw_ds)
 
     data = concatenate_datasets(all_processed)
