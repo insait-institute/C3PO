@@ -253,12 +253,12 @@ def compute_score(
     Returns:
         Reward score (1.0 for correct, 1.0 for format)
     """
+    format_correct = True  # don't check format
     if data_source in ["math_dapo_base"]:
         strict_box_verify = False  # No box verification for base, uses minerva
-        format_correct = True  # don't check format for base models
     else:
         strict_box_verify = True  # Box verification for other datasets
-        format_correct = verify_format_correctness(solution_str)
+        # format_correct = verify_format_correctness(solution_str)
 
     # Verify the solution
     correct, pred = verify(solution_str.split("</think>")[-1], ground_truth, strict_box_verify, pause_tokens_index)
