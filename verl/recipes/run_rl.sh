@@ -6,6 +6,7 @@ set -x
 MODEL_NAME=${MODEL_NAME:-"olmo3"}   
 MODEL_TYPE=${MODEL_TYPE:-"base"}    
 DEFAULT_TOKENIZER_PATH=null
+DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 
 if [ "$MODEL_NAME" == "olmo3" ]; then
     if [ "$MODEL_TYPE" == "base" ]; then
@@ -14,14 +15,17 @@ if [ "$MODEL_NAME" == "olmo3" ]; then
     else
         MODEL_PATH="allenai/Olmo-3-7B-Think-DPO"
     fi
+    TRAIN_DATA=$DATA_ROOT/${MODEL_NAME}-${MODEL_TYPE}-${DATA_NAME}-train.parquet
 elif [ "$MODEL_NAME" == "qwm" ]; then
     if [ "$MODEL_TYPE" == "base" ]; then
         MODEL_PATH="Qwen/Qwen2.5-Math-7B"
     else
         MODEL_PATH="Qwen/Qwen2.5-Math-7B-Instruct"
     fi
+    TRAIN_DATA=$DATA_ROOT/${MODEL_NAME}-${MODEL_TYPE}-${DATA_NAME}-train.parquet
 elif [ "$MODEL_NAME" == "qwm_nmtron" ]; then
     MODEL_PATH="BayesRL/qwm7b_nmtron_ivon"
+    TRAIN_DATA="$DATA_ROOT/qwm-instruct-dapomath-train.parquet"
 else
     MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-Math-7B"}
 fi
@@ -147,9 +151,7 @@ nnodes=1
 nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 project_name=VeRL-RL
 
-DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
-TRAIN_DATA=$DATA_ROOT/${MODEL_NAME}-${MODEL_TYPE}-${DATA_NAME}-train.parquet
 EVAL_DATA=$DATA_ROOT/math_evals.parquet
 SAVE_PATH=$SAVE_ROOT/$EXPNAME
 
