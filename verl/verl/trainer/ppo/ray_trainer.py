@@ -1570,7 +1570,9 @@ class RayPPOTrainer:
                 # validate
                 if self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
                     with marked_timer("testing", timing_raw, color="green"):
+                        self.checkpoint_manager.update_weights()
                         val_metrics: dict = self._validate()
+                        self.checkpoint_manager.sleep_replicas()
                         if is_last_step:
                             last_val_metrics = val_metrics
                     metrics.update(val_metrics)
