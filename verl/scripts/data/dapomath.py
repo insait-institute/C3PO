@@ -26,7 +26,11 @@ def replace_answer_prompt(example):
         {
             "role": "user",
             "content": f"Solve the following math problem. You must first think about your reasoning process and enclose it reasoning process within <think> and </think> tags, followed by your final answer within \\boxed{{}}. Any other format will be immediately rejected.\n{math_question}\nRemember to answer as follows:\n\n<think> reasoning process </think> \\boxed{{final_answer}}",
-        }
+        },
+        {
+            "role": "assistant",
+            "content": "<think>\n",
+        },
     ]
     return example
 
@@ -40,7 +44,7 @@ def tokenize_and_filter(example):
     prompt = tok.apply_chat_template(
         example["prompt"],
         tokenize=True,
-        add_generation_prompt=True,
+        add_generation_prompt=False,
         return_dict=True,
         return_tensors="pt",
     )
