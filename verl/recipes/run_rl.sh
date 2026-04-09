@@ -225,7 +225,6 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.total_epochs=3 \
     trainer.save_freq=0.25 \
     trainer.test_freq=0.05 \
-    trainer.log_completions_freq=0.05 \
     trainer.val_before_train=True \
     trainer.nnodes=$nnodes \
     trainer.n_gpus_per_node=$nproc_per_node \
