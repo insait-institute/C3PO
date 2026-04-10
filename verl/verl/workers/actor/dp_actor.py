@@ -475,7 +475,7 @@ class DataParallelPPOActor(BasePPOActor):
         return outputs
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
-    def update_policy(self, data: DataProto):
+    def update_policy(self, data: DataProto, should_take_step: bool = True, is_mc_sample_ivon: bool = False):
         # make sure we are in training mode
         self.actor_module.train()
 
@@ -531,7 +531,8 @@ class DataParallelPPOActor(BasePPOActor):
                     self.gradient_accumulation = self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
                     micro_batches = mini_batch.split(self.config.ppo_micro_batch_size_per_gpu)
 
-                self.actor_optimizer.zero_grad()
+                if not is_mc_sample_ivon:
+                    self.actor_optimizer.zero_grad()
 
                 for micro_batch in micro_batches:
                     micro_batch = micro_batch.to(get_device_id())
@@ -633,8 +634,10 @@ class DataParallelPPOActor(BasePPOActor):
                     append_to_dict(metrics, micro_batch_metrics)
                 if hasattr(self.actor_optimizer, "_is_noised") and self.actor_optimizer._is_noised:
                     self.actor_optimizer._restore_param_average(train=True)
-                grad_norm = self._optimizer_step()
-                mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
-                append_to_dict(metrics, mini_batch_metrics)
-        self.actor_optimizer.zero_grad()
+                if should_take_step:
+                    grad_norm = self._optimizer_step()
+                    mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
+                    append_to_dict(metrics, mini_batch_metrics)
+        if should_take_step:
+            self.actor_optimizer.zero_grad()
         return metrics
