@@ -7,6 +7,7 @@ MODEL_NAME=${MODEL_NAME:-"olmo3"}
 MODEL_TYPE=${MODEL_TYPE:-"base"}    
 DEFAULT_TOKENIZER_PATH=null
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
+DATA_NAME=${DATA_NAME:-"dapomath"}
 
 if [ "$MODEL_NAME" == "olmo3" ]; then
     if [ "$MODEL_TYPE" == "base" ]; then
@@ -25,7 +26,7 @@ elif [ "$MODEL_NAME" == "qwm" ]; then
     TRAIN_DATA=$DATA_ROOT/${MODEL_NAME}-${MODEL_TYPE}-${DATA_NAME}-train.parquet
 elif [ "$MODEL_NAME" == "qwm_nmtron" ]; then
     MODEL_PATH="BayesRL/qwm7b_nmtron_ivon"
-    TRAIN_DATA="$DATA_ROOT/qwm-instruct-dapomath-train.parquet"
+    TRAIN_DATA="$DATA_ROOT/qwm-instruct-${DATA_NAME}-train.parquet"
 else
     MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-Math-7B"}
 fi
@@ -34,7 +35,6 @@ IVON_INIT_METHOD=${IVON_INIT_METHOD:-"scratch"} # scratch or trained
 
 # Basic Training Params
 OPTIMIZER=${OPTIMIZER:-"adamw"}   
-DATA_NAME=${DATA_NAME:-"dapomath"}
 METHOD=${METHOD:-"grpo"}       
 
 # Hyperparameters based on MODEL_TYPE and OPTIMIZER
