@@ -72,6 +72,8 @@ PPO_KL_COEF=${PPO_KL_COEF:--1}
 CLIP_COV_RATIO=${CLIP_COV_RATIO:--1}
 CLIP_COV_LB=${CLIP_COV_LB:--1}
 CLIP_COV_UB=${CLIP_COV_UB:--1}
+MC_SAMPLES=${MC_SAMPLES:-1}
+NUM_EPOCHS=${NUM_EPOCHS:-3}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
@@ -141,6 +143,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.sync=false \
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
+        actor_rollout_ref.actor.optim.ivon_config.num_mc_samples=$MC_SAMPLES
     "
     if [ "$IVON_INIT_METHOD" == "trained" ]; then
         OPT_ARGS="${OPT_ARGS} \
@@ -225,7 +228,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=$nproc_per_node \
     trainer.logger='["console","wandb"]' \
     trainer.critic_warmup=0 \
-    trainer.total_epochs=3 \
+    trainer.total_epochs=$NUM_EPOCHS \
     trainer.save_freq=0.25 \
     trainer.test_freq=0.05 \
     trainer.val_before_train=True \
