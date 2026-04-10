@@ -109,8 +109,11 @@ elif [ "$METHOD" == "grpo_clipcov" ]; then
     EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
 fi
 
-if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ] && [ "$ESS_SCHEDULE" != "adaptive_2" ]; then
-    EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}-MINESS_${MIN_ESS}"
+if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ]; then
+    EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}"
+fi
+if [ "$MIN_ESS" != "$ESS" ]; then
+    EXPNAME="${EXPNAME}-MINESS_${MIN_ESS}"
 fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
@@ -203,7 +206,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=True \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.55 \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
     actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.temperature=1.0 \
