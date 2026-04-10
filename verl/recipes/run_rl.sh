@@ -114,7 +114,7 @@ fi
 if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ]; then
     EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}"
 fi
-if [ "$MIN_ESS" != "$ESS" ]; then
+if [ "$MIN_ESS" != "$ESS" ] && [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-MINESS_${MIN_ESS}"
 fi
 
