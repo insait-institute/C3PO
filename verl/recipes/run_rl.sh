@@ -74,6 +74,7 @@ CLIP_COV_LB=${CLIP_COV_LB:--1}
 CLIP_COV_UB=${CLIP_COV_UB:--1}
 MC_SAMPLES=${MC_SAMPLES:-1}
 NUM_EPOCHS=${NUM_EPOCHS:-3}
+GROUP_SIZE=${GROUP_SIZE:-8}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
@@ -85,7 +86,7 @@ else
 fi
 
 # --- 2. METHOD & EXPERIMENT NAMING ---
-EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}-LR_${LR}"}
+EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}-LR_${LR}-GS_${GROUP_SIZE}"}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-ESS${ESS}-IVONINIT_${IVON_INIT_METHOD}"
@@ -213,7 +214,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
     actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.temperature=1.0 \
-    actor_rollout_ref.rollout.n=8 \
+    actor_rollout_ref.rollout.n=$GROUP_SIZE \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=3072 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
