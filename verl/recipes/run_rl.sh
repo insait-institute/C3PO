@@ -72,6 +72,9 @@ PPO_KL_COEF=${PPO_KL_COEF:--1}
 CLIP_COV_RATIO=${CLIP_COV_RATIO:--1}
 CLIP_COV_LB=${CLIP_COV_LB:--1}
 CLIP_COV_UB=${CLIP_COV_UB:--1}
+MC_SAMPLES=${MC_SAMPLES:-1}
+NUM_EPOCHS=${NUM_EPOCHS:-3}
+GROUP_SIZE=${GROUP_SIZE:-8}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
@@ -83,7 +86,7 @@ else
 fi
 
 # --- 2. METHOD & EXPERIMENT NAMING ---
-EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}-LR_${LR}"}
+EXPNAME=${EXPNAME:-"${MODEL_NAME}-${MODEL_TYPE}-${OPTIMIZER}-${DATA_NAME}-LR_${LR}-GS_${GROUP_SIZE}"}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-ESS${ESS}-IVONINIT_${IVON_INIT_METHOD}"
@@ -112,7 +115,7 @@ fi
 if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ]; then
     EXPNAME="${EXPNAME}-SCHED_${ESS_SCHEDULE}"
 fi
-if [ "$MIN_ESS" != "$ESS" ]; then
+if [ "$MIN_ESS" != "$ESS" ] && [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-MINESS_${MIN_ESS}"
 fi
 
@@ -141,6 +144,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.sync=false \
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
+        actor_rollout_ref.actor.optim.ivon_config.mc_samples=$MC_SAMPLES
     "
     if [ "$IVON_INIT_METHOD" == "trained" ]; then
         OPT_ARGS="${OPT_ARGS} \
@@ -210,7 +214,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
     actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.temperature=1.0 \
-    actor_rollout_ref.rollout.n=8 \
+    actor_rollout_ref.rollout.n=$GROUP_SIZE \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=3072 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
@@ -225,7 +229,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=$nproc_per_node \
     trainer.logger='["console","wandb"]' \
     trainer.critic_warmup=0 \
-    trainer.total_epochs=3 \
+    trainer.total_epochs=$NUM_EPOCHS \
     trainer.save_freq=0.25 \
     trainer.test_freq=0.05 \
     trainer.val_before_train=True \

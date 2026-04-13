@@ -838,7 +838,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
     @DistProfiler.annotate(color="red", role="actor_update")
-    def update_actor(self, data: DataProto, should_take_step: bool, is_mc_sample_ivon: bool = False):
+    def update_actor(self, data: DataProto):
         assert self._is_actor
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
@@ -850,7 +850,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             data.meta_info.setdefault("pad_token_id", self.tokenizer.pad_token_id)
             # perform training
             with Timer(name="update_policy", logger=None) as timer:
-                metrics = self.actor.update_policy(data=data, should_take_step=should_take_step, is_mc_sample_ivon=is_mc_sample_ivon)
+                metrics = self.actor.update_policy(data=data)
             delta_time = timer.last
             global_num_tokens = data.meta_info["global_token_num"]
             images_seqlens = data.meta_info.get("images_seqlens", None)
@@ -863,7 +863,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 metrics["actor/entropy"] = sum(metrics["actor/entropy"]) / len(metrics["actor/entropy"])
             lr = self.actor_lr_scheduler.get_last_lr()[0]
             metrics["actor/lr"] = lr.item() if torch.is_tensor(lr) else lr
-            if should_take_step:
+            if data.meta_info["should_take_step"]:
                 self.actor_lr_scheduler.step()
                 # Update the ESS according to the scheduler type ("constant", "linear", "cosine", "adaptive")
                 if self.config.actor.optim.optimizer.lower() == "ivon":

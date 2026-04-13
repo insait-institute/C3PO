@@ -1182,11 +1182,13 @@ class RayPPOTrainer:
             old_log_prob_mfu = 0
         return old_log_prob, old_log_prob_mfu
 
-    def _update_actor(self, batch: DataProto, should_take_step: bool) -> DataProto:
+    def _update_actor(self, batch: DataProto, should_take_step: bool, is_mc_sample_ivon: bool) -> DataProto:
         rollout_config = self.config.actor_rollout_ref.rollout
         batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
         # TODO: Make "temperature" single source of truth from generation.
         batch.meta_info["temperature"] = rollout_config.temperature
+        batch.meta_info["is_mc_sample_ivon"] = is_mc_sample_ivon
+        batch.meta_info["should_take_step"] = should_take_step
         # update actor
         if self.use_legacy_worker_impl == "disable":
             batch_td = batch.to_tensordict()
@@ -1208,14 +1210,14 @@ class RayPPOTrainer:
                 dataloader_kwargs={"shuffle": shuffle},
             )
 
-            actor_output = self.actor_rollout_wg.update_actor(batch_td, should_take_step)
+            actor_output = self.actor_rollout_wg.update_actor(batch_td)
             actor_output = tu.get(actor_output, "metrics")
             actor_output = rename_dict(actor_output, "actor/")
             # modify key name
             actor_output["perf/mfu/actor"] = actor_output.pop("actor/mfu")
             actor_output = DataProto.from_single_dict(data={}, meta_info={"metrics": actor_output})
         else:
-            actor_output = self.actor_rollout_wg.update_actor(batch, should_take_step)
+            actor_output = self.actor_rollout_wg.update_actor(batch)
 
         return actor_output
 
@@ -1306,12 +1308,13 @@ class RayPPOTrainer:
         is_mc_sample_ivon = False
 
         if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
-            ivon_num_mc_samples = self.config.actor_rollout_ref.actor.optim.ivon_config.ivon_num_mc_samples
+            ivon_num_mc_samples = self.config.actor_rollout_ref.actor.optim.ivon_config.mc_samples
             is_mc_sample_ivon = ivon_num_mc_samples > 1
 
         for epoch in range(current_epoch, self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 for mc_sample_idx in range(ivon_num_mc_samples):
+                    logger.log(data={"mc_sample_idx": mc_sample_idx}, step=self.global_steps)
                     is_last_mc_sample = mc_sample_idx == ivon_num_mc_samples - 1
                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
                         self.actor_rollout_wg.async_calls_finalize_fn_exec(blocking=False)
@@ -1344,6 +1347,7 @@ class RayPPOTrainer:
                     is_last_step = self.global_steps >= self.total_training_steps
                     with marked_timer("step", timing_raw):
                         # generate a batch
+                        logger.log(data={"finished_gen": False}, step=self.global_steps)
                         with marked_timer("gen", timing_raw, color="red"):
                             if not self.async_rollout_mode:
                                 gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch_output)
@@ -1356,6 +1360,7 @@ class RayPPOTrainer:
                                     self.async_rollout_manager.stop_profile()
                             timing_raw.update(gen_batch_output.meta_info["timing"])
                             gen_batch_output.meta_info.pop("timing", None)
+                        logger.log(data={"finished_gen": True}, step=self.global_steps)
 
                         if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                             with marked_timer("gen_max", timing_raw, color="purple"):
