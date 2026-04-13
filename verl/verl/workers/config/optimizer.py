@@ -192,7 +192,7 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         optimizer_args["sync"] = config.ivon_config.sync
         optimizer_args["debias"] = config.ivon_config.debias
         optimizer_args["rescale_lr"] = config.ivon_config.rescale_lr
-        optimizer_args["mc_samples"] = config.ivon_config.num_mc_samples
+        optimizer_args["mc_samples"] = config.ivon_config.mc_samples
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
