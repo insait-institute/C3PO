@@ -8,14 +8,14 @@ import torch
 import torch.distributed as dist
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
-from ivon.ivon import IVON
 from scipy.stats import norm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from vllm import LLM, SamplingParams
 
+from ivon.ivon import IVON
+
 NUM_WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else 1
-MODEL_ID = sys.argv[1] if len(sys.argv) > 1 else "Qwen/Qwen3-4B"
+MODEL_ID = sys.argv[1] if len(sys.argv) > 1 else "Qwen/Qwen2.5-Math-7B"
 if not dist.is_initialized():
     dist.init_process_group(backend="nccl")
 
@@ -57,7 +57,7 @@ def _domain_filter(example):
 def _preprocess(example):
     example["messages"] = [
         {"role": "user", "content": f"Answer the following question:\n{example['problem']}"},
-        {"role": "assistant", "content": example["deepseek_solution"], "reasoning_content": example["deepseek_reasoning"]},
+        {"role": "assistant", "content": f"<think>\n{example['deepseek_reasoning']}\n\n{example['deepseek_solution']}"},
     ]
     example["prompt"] = tokenizer.apply_chat_template(example["messages"][:1], tokenize=False, add_generation_prompt=True, thinking=True)
     example["full_text"] = tokenizer.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False, thinking=True)
@@ -168,8 +168,11 @@ else:
         pickle.dump(results, f)
     print(f"\nAverage Standard PPL: {np.mean(results['std']):.4f}")
     print(f"Average IVON PPL: {np.mean(results['scratch']):.4f}")
+    print(f"stddev Standard PPL: {np.std(results['std']):.4f}")
+    print(f"stddev IVON PPL: {np.std(results['scratch']):.4f}")
     if opt_sft:
         print(f"Average SFT PPL: {np.mean(results['sft']):.4f}")
+        print(f"stddev SFT PPL: {np.std(results['sft']):.4f}")
     print(f"--- Results saved to {CACHE_FILE} ---")
 
 print("[*] Generating distribution plots...")
