@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import concurrent.futures
+
 try:
     from math_verify import parse, verify
 except ImportError:
@@ -29,11 +30,13 @@ def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0
         parsed_output = parse(model_output, parsing_timeout=None)
         parsed_ground_truth = parse(ground_truth_boxed, parsing_timeout=None)
         return verify(parsed_output, parsed_ground_truth, timeout_seconds=None)
+
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_compute)
             ret_score = future.result(timeout=10)  # 10 seconds timeout
     except concurrent.futures.TimeoutError:
         ret_score = timeout_score
-
+    except Exception:
+        pass
     return ret_score
