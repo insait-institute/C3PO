@@ -144,7 +144,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.sync=false \
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
-        actor_rollout_ref.actor.optim.ivon_config.num_mc_samples=$MC_SAMPLES
+        actor_rollout_ref.actor.optim.ivon_config.mc_samples=$MC_SAMPLES
     "
     if [ "$IVON_INIT_METHOD" == "trained" ]; then
         OPT_ARGS="${OPT_ARGS} \

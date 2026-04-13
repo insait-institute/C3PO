@@ -863,31 +863,32 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 metrics["actor/entropy"] = sum(metrics["actor/entropy"]) / len(metrics["actor/entropy"])
             lr = self.actor_lr_scheduler.get_last_lr()[0]
             metrics["actor/lr"] = lr.item() if torch.is_tensor(lr) else lr
-            self.actor_lr_scheduler.step()
-            # Update the ESS according to the scheduler type ("constant", "linear", "cosine", "adaptive")
-            if self.config.actor.optim.optimizer.lower() == "ivon":
-                ivon_config = self.config.actor.optim.ivon_config
-                ess_schedule = ivon_config.ess_schedule
-                progress = self.actor_optimizer.current_step / self.total_steps
-                ess_scale = 1.0
-                if ess_schedule == "cosine":
-                    ess_scale = math.cos(math.pi * progress)
-                    ess_scale = ess_scale * (1 - ivon_config.min_ess_ratio) * 0.5 + (1 + ivon_config.min_ess_ratio) * 0.5
-                elif ess_schedule == "linear":
-                    ess_scale = 1.0 - (1.0 - ivon_config.min_ess_ratio) * progress
-                elif ess_schedule == "adaptive_1":
-                    if self.max_entropy is None or self.max_entropy < metrics["actor/entropy"]:
-                        self.max_entropy = metrics["actor/entropy"]
-                    elif metrics["actor/entropy"] <= 0.75 * self.max_entropy:
-                        ess_scale = ivon_config.min_ess_ratio
-                elif ess_schedule == "adaptive_2":
-                    if self.actor_optimizer.current_step != 1:
-                        ess_scale = self.prev_ess_scale * (metrics["actor/entropy"] / self.prev_entropy)
-                    self.prev_entropy = metrics["actor/entropy"]
-                    self.prev_ess_scale = ess_scale
-                for param_group in self.actor.actor_optimizer.param_groups:
-                    param_group["ess"] = self.initial_ess * ess_scale
-                metrics["actor/ess"] = self.initial_ess * ess_scale
+            if data.meta_info["should_take_step"]:
+                self.actor_lr_scheduler.step()
+                # Update the ESS according to the scheduler type ("constant", "linear", "cosine", "adaptive")
+                if self.config.actor.optim.optimizer.lower() == "ivon":
+                    ivon_config = self.config.actor.optim.ivon_config
+                    ess_schedule = ivon_config.ess_schedule
+                    progress = self.actor_optimizer.current_step / self.total_steps
+                    ess_scale = 1.0
+                    if ess_schedule == "cosine":
+                        ess_scale = math.cos(math.pi * progress)
+                        ess_scale = ess_scale * (1 - ivon_config.min_ess_ratio) * 0.5 + (1 + ivon_config.min_ess_ratio) * 0.5
+                    elif ess_schedule == "linear":
+                        ess_scale = 1.0 - (1.0 - ivon_config.min_ess_ratio) * progress
+                    elif ess_schedule == "adaptive_1":
+                        if self.max_entropy is None or self.max_entropy < metrics["actor/entropy"]:
+                            self.max_entropy = metrics["actor/entropy"]
+                        elif metrics["actor/entropy"] <= 0.75 * self.max_entropy:
+                            ess_scale = ivon_config.min_ess_ratio
+                    elif ess_schedule == "adaptive_2":
+                        if self.actor_optimizer.current_step != 1:
+                            ess_scale = self.prev_ess_scale * (metrics["actor/entropy"] / self.prev_entropy)
+                        self.prev_entropy = metrics["actor/entropy"]
+                        self.prev_ess_scale = ess_scale
+                    for param_group in self.actor.actor_optimizer.param_groups:
+                        param_group["ess"] = self.initial_ess * ess_scale
+                    metrics["actor/ess"] = self.initial_ess * ess_scale
             # TODO: here, we should return all metrics
             output = DataProto(meta_info={"metrics": metrics})
 
