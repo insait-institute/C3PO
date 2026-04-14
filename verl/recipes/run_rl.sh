@@ -118,6 +118,9 @@ fi
 if [ "$MIN_ESS" != "$ESS" ] && [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-MINESS_${MIN_ESS}"
 fi
+if [ "$MC_SAMPLES" != 1 ]; then
+    EXPNAME="${EXPNAME}-MCSAMPLES${MC_SAMPLES}"
+fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
 # Handle KL_Cov/Clip_Cov logic

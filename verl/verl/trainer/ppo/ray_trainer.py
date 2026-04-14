@@ -1314,7 +1314,6 @@ class RayPPOTrainer:
         for epoch in range(current_epoch, self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 for mc_sample_idx in range(ivon_num_mc_samples):
-                    logger.log(data={"mc_sample_idx": mc_sample_idx}, step=self.global_steps)
                     is_last_mc_sample = mc_sample_idx == ivon_num_mc_samples - 1
                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
                         self.actor_rollout_wg.async_calls_finalize_fn_exec(blocking=False)
@@ -1347,7 +1346,6 @@ class RayPPOTrainer:
                     is_last_step = self.global_steps >= self.total_training_steps
                     with marked_timer("step", timing_raw):
                         # generate a batch
-                        logger.log(data={"finished_gen": False}, step=self.global_steps)
                         with marked_timer("gen", timing_raw, color="red"):
                             if not self.async_rollout_mode:
                                 gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch_output)
@@ -1360,7 +1358,6 @@ class RayPPOTrainer:
                                     self.async_rollout_manager.stop_profile()
                             timing_raw.update(gen_batch_output.meta_info["timing"])
                             gen_batch_output.meta_info.pop("timing", None)
-                        logger.log(data={"finished_gen": True}, step=self.global_steps)
 
                         if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                             with marked_timer("gen_max", timing_raw, color="purple"):
