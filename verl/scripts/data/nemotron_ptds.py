@@ -7,7 +7,7 @@ from datasets import concatenate_datasets, load_dataset
 from transformers import AutoTokenizer
 
 model_dict = {
-    "olmo2": "allenai/OLMo-2-0425-1B-SFT",
+    "olmo3": "allenai/Olmo-3-7B-Think-DPO",
     "qwm": "Qwen/Qwen2.5-Math-7B-Instruct",
     "qwen2-5": "Qwen/Qwen2.5-7B-Instruct",
 }

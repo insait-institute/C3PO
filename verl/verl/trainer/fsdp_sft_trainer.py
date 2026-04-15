@@ -755,6 +755,8 @@ class FSDPSFTTrainer:
 
                 is_last_step = global_step >= self.total_training_steps
                 is_valid_step = self.config.trainer.test_freq and global_step % self.config.trainer.test_freq == 0
+                if self.config.trainer.val_before_train:
+                    is_valid_step = is_valid_step or global_step == 0
                 is_save_step = self.config.trainer.save_freq and global_step % self.config.trainer.save_freq == 0
 
                 # early exit or validation step
