@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 model_dict = {
     "olmo3": "allenai/Olmo-3-7B-Think-DPO",
     "qwm": "Qwen/Qwen2.5-Math-7B-Instruct",
-    "qwen2-5": "Qwen/Qwen2.5-7B-Instruct",
+    "llama": "meta-llama/Llama-3.1-8B-Instruct",
 }
 
 model_name = sys.argv[1] if len(sys.argv) > 1 else "qwm"
