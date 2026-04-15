@@ -1,7 +1,7 @@
 import os
 import sys
 from pathlib import Path
-
+import argparse
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
@@ -10,9 +10,6 @@ mapping = {
     "olmo3": "allenai/Olmo-3-7B-Instruct-DPO",
     "qwm": "Qwen/Qwen2.5-Math-7B",
 }
-model = sys.argv[1] if len(sys.argv) > 1 else "olmo3"
-tok = AutoTokenizer.from_pretrained(mapping[model])
-
 
 def tokenize_and_filter(example):
     prompt = tok.apply_chat_template(
@@ -29,14 +26,26 @@ def edit_data_source(example):
     example["data_source"] = "math_dapo_base"
     return example
 
+def main(args):
+    ds = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
+    df = ds.to_pandas()
+    df["idx"] = df["extra_info"].str["index"]
+    df = df.drop_duplicates("idx", keep="first").drop("idx", axis=1)
+    ds = Dataset.from_pandas(df)
+    ds = ds.filter(tokenize_and_filter, num_proc=NUM_WORKERS)
+    ds = ds.map(edit_data_source, num_proc=NUM_WORKERS)
+    save_dir = Path(__file__).parents[2] / "data"
+    save_name = save_dir / f"{args.model}-base-dapomath-train.parquet"
+    if args.max_rows is not None:
+        ds = ds.shuffle(seed=42).select(range(args.max_rows))
+        save_name = f"{args.model}-base-dapomath-dc{args.max_rows}-train.parquet"
+    ds.to_parquet(save_dir / save_name)
 
-ds = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
-df = ds.to_pandas()
-df["idx"] = df["extra_info"].str["index"]
-df = df.drop_duplicates("idx", keep="first").drop("idx", axis=1)
-ds = Dataset.from_pandas(df)
-ds = ds.filter(tokenize_and_filter, num_proc=NUM_WORKERS)
-ds = ds.map(edit_data_source, num_proc=NUM_WORKERS)
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="qwm")
+    parser.add_argument("--max_rows", type=int, default=None)
+    args = parser.parse_args()
+    tok = AutoTokenizer.from_pretrained(mapping[args.model])
 
-save_dir = Path(__file__).parents[2] / "data"
-ds.to_parquet(save_dir / f"{model}-base-dapomath-train.parquet")
+    main(args)
