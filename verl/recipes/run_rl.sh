@@ -158,6 +158,12 @@ else
     OPT_ARGS="actor_rollout_ref.actor.optim.optimizer=AdamW"
 fi
 
+LR_WARMUP_STEPS=34
+if [[ $DATA_NAME == "dapomath-dc1024" ]]; then
+    LR_WARMUP_STEPS=7
+fi
+
+
 # --- 4. PATHS & ENV ---
 nnodes=1
 nproc_per_node=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
@@ -201,7 +207,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.weight_decay=$WD \
     actor_rollout_ref.actor.optim.clip_grad=1.0 \
     actor_rollout_ref.actor.optim.lr=$LR \
-    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.02 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps=$LR_WARMUP_STEPS \
     actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
     $OPT_ARGS \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
