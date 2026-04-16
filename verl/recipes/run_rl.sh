@@ -159,10 +159,13 @@ else
 fi
 
 LR_WARMUP_STEPS=34
+EVAL_FREQ=28
 if [[ $DATA_NAME == "dapomath-dc1024" ]]; then
     LR_WARMUP_STEPS=7
+    EVAL_FREQ=16
 fi
 
+SAVE_FREQ=${SAVE_FREQ:-0.25}
 
 # --- 4. PATHS & ENV ---
 nnodes=1
@@ -239,8 +242,8 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb"]' \
     trainer.critic_warmup=0 \
     trainer.total_epochs=$NUM_EPOCHS \
-    trainer.save_freq=0.25 \
-    trainer.test_freq=0.05 \
+    trainer.save_freq=$SAVE_FREQ \
+    trainer.test_freq=$EVAL_FREQ \
     trainer.log_completions_freq=0.05 \
     trainer.val_before_train=True \
     trainer.nnodes=$nnodes \
