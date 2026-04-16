@@ -5,9 +5,10 @@ import math
 import os
 import pickle
 import sys
+from pathlib import Path
 from collections import Counter
 from typing import Any, Dict, List
-
+import torch
 import constants
 import numpy as np
 import yaml
@@ -16,7 +17,7 @@ from formatter import BaseFormatter, get_formatter_mapping
 from math_verify import parse, verify
 from tqdm import tqdm
 from transformers import AutoTokenizer
-
+from vllm import LLM, SamplingParams
 import wandb
 from vllm import SamplingParams
 
@@ -95,14 +96,13 @@ class MathEvalEngine:
         self.cfg = cfg
         self.model_name = cfg.model.path
 
-        # self.llm = LLM(
-        #     model=self.model_name,
-        #     tensor_parallel_size=cfg.model.tp_size or torch.cuda.device_count(),
-        #     trust_remote_code=True,
-        #     max_model_len=cfg.model.max_model_len,
-        #     gpu_memory_utilization=0.95,
-        # )
-        self.llm = None
+        self.llm = LLM(
+            model=self.model_name,
+            tensor_parallel_size=cfg.model.tp_size or torch.cuda.device_count(),
+            trust_remote_code=True,
+            max_model_len=cfg.model.max_model_len,
+            gpu_memory_utilization=0.95,
+        )
 
     def _get_formatter(self, name: str, ds: Dataset) -> BaseFormatter:
         mapping = get_formatter_mapping()
@@ -347,18 +347,16 @@ def main():
     cfg = load_config_with_overrides()
     engine = MathEvalEngine(cfg)
     dataset = engine.load_and_prepare_data()
-    with open("eval_predictions.pkl", "rb") as f:
-        predictions = pickle.load(f)
-    # predictions = engine.run_inference(dataset)
-    # save_dir = Path(cfg.model.path)
-    # if save_dir.exists():
-    #     with open(save_dir / "eval_predictions.pkl", "wb") as f:
-    #         pickle.dump(predictions, f)
-    # else:
-    #     save_dir = Path(__file__).parents[0] / "eval_preds" / cfg.model.path
-    #     save_dir.mkdir(parents=True, exist_ok=True)
-    #     with open(save_dir / "eval_predictions.pkl", "wb") as f:
-    #         pickle.dump(predictions, f)
+    predictions = engine.run_inference(dataset)
+    save_dir = Path(cfg.model.path)
+    if save_dir.exists():
+        with open(save_dir / "eval_predictions.pkl", "wb") as f:
+            pickle.dump(predictions, f)
+    else:
+        save_dir = Path(__file__).parents[0] / "eval_preds" / cfg.model.path
+        save_dir.mkdir(parents=True, exist_ok=True)
+        with open(save_dir / "eval_predictions.pkl", "wb") as f:
+            pickle.dump(predictions, f)
     scores = engine.evaluate(predictions, dataset["answer"])
     engine.report_metrics(dataset, scores)
 
