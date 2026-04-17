@@ -5,12 +5,15 @@ import math
 import os
 import pickle
 import sys
-from pathlib import Path
+import signal
+import multiprocessing
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, List
-import torch
+
 import constants
 import numpy as np
+import torch
 import yaml
 from datasets import Dataset, Value, concatenate_datasets, load_dataset
 from formatter import BaseFormatter, get_formatter_mapping
@@ -18,8 +21,8 @@ from math_verify import parse, verify
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
+
 import wandb
-from vllm import SamplingParams
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
@@ -91,18 +94,78 @@ def _prompt_map_fn(example, add_open_think):
     return example
 
 
+class TimeoutException(Exception):
+    pass
+
+
+def _timeout_handler(signum, frame):
+    raise TimeoutException("Evaluation timed out")
+
+
+def _evaluate_single(args):
+    preds, ref, timeout_seconds = args
+    sample_scores = []
+    parsed_preds = []
+
+    # Configure signal handler for timeout
+    signal.signal(signal.SIGALRM, _timeout_handler)
+
+    try:
+        if ref is not None:
+            # Allow up to 10s for reference parsing
+            signal.setitimer(signal.ITIMER_REAL, 10.0)
+            ref_parsed = parse(ref, parsing_timeout=10)
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        else:
+            ref_parsed = None
+    except Exception:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        ref_parsed = None
+
+    for p in preds:
+        try:
+            # 10s maximum for parsing
+            signal.setitimer(signal.ITIMER_REAL, 10.0)
+            p_parsed = parse(p, parsing_timeout=10)[0]
+            
+            # Use provided timeout for verification
+            signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+            is_correct = verify(ref_parsed, p_parsed, timeout_seconds=None)
+            
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
+            parsed_preds.append(p_parsed)
+            sample_scores.append(is_correct)
+        except Exception:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            parsed_preds.append(None)
+            sample_scores.append(False)
+
+    valid_parsed = [p for p in parsed_preds if p is not None]
+
+    try:
+        if valid_parsed:
+            # We wrap this in try-except because sympy's str() and evalf() can occasionally
+            # raise exceptions like ZeroDivisionError on mathematically malformed inputs.
+            str_preds = [str(p) for p in valid_parsed]
+            counts = Counter(str_preds)
+            majority_answer_str = counts.most_common(1)[0][0]
+
+            representative_idx = str_preds.index(majority_answer_str)
+            orig_idx = [i for i, x in enumerate(parsed_preds) if x is not None][representative_idx]
+            majority_score = sample_scores[orig_idx]
+        else:
+            majority_score = False
+    except Exception:
+        majority_score = False
+
+    return sample_scores, majority_score
+
+
 class MathEvalEngine:
     def __init__(self, cfg):
         self.cfg = cfg
         self.model_name = cfg.model.path
-
-        self.llm = LLM(
-            model=self.model_name,
-            tensor_parallel_size=cfg.model.tp_size or torch.cuda.device_count(),
-            trust_remote_code=True,
-            max_model_len=cfg.model.max_model_len,
-            gpu_memory_utilization=0.95,
-        )
 
     def _get_formatter(self, name: str, ds: Dataset) -> BaseFormatter:
         mapping = get_formatter_mapping()
@@ -115,7 +178,7 @@ class MathEvalEngine:
         if sources == "all":
             sources = list(constants.DS_ID_MAP.keys())
         elif isinstance(sources, str):
-            sources = [sources]
+            sources = sources.split(",")
 
         for name in sources:
             path = constants.DS_ID_MAP.get(name, name)
@@ -149,6 +212,14 @@ class MathEvalEngine:
     def run_inference(self, dataset: Dataset) -> List[List[str]]:
         log.info(f"Starting batch inference for {len(dataset)} prompts...")
 
+        self.llm = LLM(
+            model=self.model_name,
+            tensor_parallel_size=self.cfg.model.tp_size or torch.cuda.device_count(),
+            trust_remote_code=True,
+            max_model_len=self.cfg.model.max_model_len,
+            gpu_memory_utilization=0.95,
+        )
+
         prompts = list(dataset["prompt"])
         tokenizer_name = self.model_name
         if self.model_name == "allenai/Olmo-3-1025-7B" or "olmo3-base" in self.model_name:
@@ -170,59 +241,21 @@ class MathEvalEngine:
 
     def evaluate(self, predictions: List[List[str]], references: List[str], timeout_seconds: float = 5.0) -> Dict[str, Any]:
         """
-        Verifies mathematical correctness with a per-sample timeout.
+        Verifies mathematical correctness with a per-sample timeout using multiprocessing.
         """
-        log.info("Scoring model responses...")
+        log.info("Scoring model responses in parallel...")
         all_sample_scores = []
         majority_scores = []
 
-        for preds, ref in tqdm(zip(predictions, references), total=len(references), desc="Scoring..."):
-            sample_scores = []
-            parsed_preds = []
+        args_iter = ((preds, ref, timeout_seconds) for preds, ref in zip(predictions, references))
 
-            try:
-                if ref is not None:
-                    ref_parsed = parse(ref)
-                else:
-                    ref_parsed = None
+        with multiprocessing.Pool(NUM_WORKERS) as pool:
+            # We use pool.imap to keep order and stream results for tqdm
+            results = list(tqdm(pool.imap(_evaluate_single, args_iter), total=len(references), desc="Scoring..."))
 
-                # 2. Parse Predictions and Check Answers
-                for p in preds:
-                    try:
-                        p_parsed = parse(p)[0]
-                        is_correct = verify(ref_parsed, p_parsed)
-
-                        parsed_preds.append(p_parsed)
-                        sample_scores.append(is_correct)
-                    except Exception as e:
-                        log.warning(f"Error processing prediction: {e}")
-                        parsed_preds.append(None)
-                        sample_scores.append(False)
-
-                all_sample_scores.append(sample_scores)
-
-                # 3. Self-Consistency (Majority Vote)
-                # Filter out None values from failed parses
-                valid_parsed = [p for p in parsed_preds if p is not None]
-
-                if valid_parsed:
-                    str_preds = [str(p) for p in valid_parsed]
-                    counts = Counter(str_preds)
-                    majority_answer_str = counts.most_common(1)[0][0]
-
-                    # Find the representative object
-                    representative_idx = str_preds.index(majority_answer_str)
-                    # This check is usually fast because it was already computed in sample_scores
-                    # but we use the existing score to be safe.
-                    orig_idx = [i for i, x in enumerate(parsed_preds) if x is not None][representative_idx]
-                    majority_scores.append(sample_scores[orig_idx])
-                else:
-                    majority_scores.append(False)
-
-            except Exception as e:
-                log.error(f"Critical failure in sample evaluation: {e}")
-                all_sample_scores.append([False] * len(preds))
-                majority_scores.append(False)
+        for sample_scores, majority_score in results:
+            all_sample_scores.append(sample_scores)
+            majority_scores.append(majority_score)
 
         return {"sample_scores": all_sample_scores, "majority_scores": majority_scores}
 
@@ -347,16 +380,30 @@ def main():
     cfg = load_config_with_overrides()
     engine = MathEvalEngine(cfg)
     dataset = engine.load_and_prepare_data()
-    predictions = engine.run_inference(dataset)
     save_dir = Path(cfg.model.path)
-    if save_dir.exists():
-        with open(save_dir / "eval_predictions.pkl", "wb") as f:
-            pickle.dump(predictions, f)
-    else:
+    if Path(cfg.model.path).exists():
         save_dir = Path(__file__).parents[0] / "eval_preds" / cfg.model.path
-        save_dir.mkdir(parents=True, exist_ok=True)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    if (save_dir / "eval_predictions.pkl").exists():
+        log.info("Loading predictions from file...")
+        with open(save_dir / "eval_predictions.pkl", "rb") as f:
+            predictions = pickle.load(f)
+    else:
+        log.info("Generating predictions...")
+        predictions = engine.run_inference(dataset)
         with open(save_dir / "eval_predictions.pkl", "wb") as f:
             pickle.dump(predictions, f)
+        log.info("Predictions saved to file.")
+    # if save_dir.exists():
+    #     with open(save_dir / "eval_predictions.pkl", "wb") as f:
+    #         pickle.dump(predictions, f)
+    # else:
+    #     save_dir = Path(__file__).parents[0] / "eval_preds" / cfg.model.path
+    #     save_dir.mkdir(parents=True, exist_ok=True)
+    #     with open(save_dir / "eval_predictions.pkl", "wb") as f:
+    #         pickle.dump(predictions, f)
+    log.info("Evaluating predictions...")
     scores = engine.evaluate(predictions, dataset["answer"])
     engine.report_metrics(dataset, scores)
 
