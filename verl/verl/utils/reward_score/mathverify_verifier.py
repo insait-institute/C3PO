@@ -11,32 +11,52 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import concurrent.futures
+import multiprocessing
+import logging
 
-try:
-    from math_verify import parse, verify
-except ImportError:
-    print("To use Math-Verify, please install it first by running `pip install math-verify`.")
+from math_verify import parse, verify
+
+class TimeoutWarningFilter(logging.Filter):
+    def filter(self, record):
+        if "Timeout is disabled" in record.getMessage() and "prevent code getting stuck" in record.getMessage():
+            return False
+        return True
+
+logging.getLogger("math_verify.parser").addFilter(TimeoutWarningFilter())
+logging.getLogger("math_verify.grader").addFilter(TimeoutWarningFilter())
+
+
+def _worker_compute(model_output: str, ground_truth_boxed: str, q: multiprocessing.Queue):
+    """Helper worker to compute score with parsing and verification."""
+    try:
+        parsed_output = parse(model_output, parsing_timeout=None)
+        parsed_ground_truth = parse(ground_truth_boxed, parsing_timeout=None)
+        res = verify(parsed_output, parsed_ground_truth, timeout_seconds=None)
+        q.put(("success", res))
+    except Exception:
+        q.put(("error", 0.0))
 
 
 def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0) -> bool:
-    ret_score = 0.0
-
     # Wrap the ground truth in \boxed{} format for verification
     ground_truth_boxed = "\\boxed{" + ground_truth + "}"
 
-    def _compute():
-        """Helper function to compute score with parsing and verification."""
-        parsed_output = parse(model_output, parsing_timeout=None)
-        parsed_ground_truth = parse(ground_truth_boxed, parsing_timeout=None)
-        return verify(parsed_output, parsed_ground_truth, timeout_seconds=None)
+    ctx = multiprocessing.get_context("fork")
+    q = ctx.Queue()
 
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_compute)
-            ret_score = future.result(timeout=10)  # 10 seconds timeout
-    except concurrent.futures.TimeoutError:
-        ret_score = timeout_score
-    except Exception:
-        pass
-    return ret_score
+    p = ctx.Process(target=_worker_compute, args=(model_output, ground_truth_boxed, q))
+    p.start()
+    p.join(10)  # 10 seconds timeout
+
+    if p.is_alive():
+        p.terminate()
+        p.join()
+        return timeout_score
+
+    if not q.empty():
+        status, res = q.get()
+        if status == "success":
+            return 1.0 if res else 0.0
+        else:
+            return 0.0
+    return 0.0
