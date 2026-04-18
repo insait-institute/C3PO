@@ -13,6 +13,8 @@
 # limitations under the License.
 # from . import gsm8k, math, prime_math, prime_code
 
+import re
+
 from verl.utils.import_utils import deprecated
 
 
@@ -41,7 +43,16 @@ def default_compute_score(
     Raises:
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
-    if data_source == "openai/gsm8k":
+    if data_source == "dummy_task":
+
+        def verify_format_correctness(sol: str):
+            pattern = r"^<think>(?!.*<think>)(.*?)</think>\n<answer>\s*\\boxed\{(.*?)\}\s*</answer>$"
+            match = re.match(pattern, sol, re.DOTALL | re.MULTILINE)
+            return True if match else False
+
+        return 1 if verify_format_correctness(solution_str) else -1
+
+    elif data_source == "openai/gsm8k":
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)
