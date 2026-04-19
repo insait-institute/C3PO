@@ -2,11 +2,11 @@ import argparse
 import ast
 import logging
 import math
+import multiprocessing
 import os
 import pickle
-import sys
 import signal
-import multiprocessing
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 import constants
 import numpy as np
 import torch
+import wandb
 import yaml
 from datasets import Dataset, Value, concatenate_datasets, load_dataset
 from formatter import BaseFormatter, get_formatter_mapping
@@ -21,8 +22,6 @@ from math_verify import parse, verify
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
-
-import wandb
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
@@ -127,11 +126,11 @@ def _evaluate_single(args):
             # 10s maximum for parsing
             signal.setitimer(signal.ITIMER_REAL, 10.0)
             p_parsed = parse(p, parsing_timeout=10)[0]
-            
+
             # Use provided timeout for verification
             signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
             is_correct = verify(ref_parsed, p_parsed, timeout_seconds=None)
-            
+
             signal.setitimer(signal.ITIMER_REAL, 0)
 
             parsed_preds.append(p_parsed)
@@ -380,9 +379,8 @@ def main():
     cfg = load_config_with_overrides()
     engine = MathEvalEngine(cfg)
     dataset = engine.load_and_prepare_data()
-    save_dir = Path(cfg.model.path)
-    if Path(cfg.model.path).exists():
-        save_dir = Path(__file__).parents[0] / "eval_preds" / cfg.model.path
+    save_name = cfg.model.path.split("/")[-1]
+    save_dir = Path(__file__).parents[0] / "eval_preds" / save_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
     if (save_dir / "eval_predictions.pkl").exists():
