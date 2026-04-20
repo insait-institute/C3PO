@@ -51,7 +51,7 @@ if __name__ == "__main__":
                 "prompt": [
                     {
                         "role": "user",
-                        "content": f"Solve the following math problem. You must first think about your reasoning process and enclose it reasoning process within <think> and </think> tags, followed by your final answer within \\boxed{{}}. Any other format will be immediately rejected.\n{question}\nRemember to answer as follows:\n\n<think> reasoning process </think> \\boxed{{final_answer}}",
+                        "content": f"Solve the following math problem. You must first think about your reasoning process and enclose it reasoning process within <think> and </think> tags, followed by your final answer within \\boxed{{}}. Any other format will be immediately rejected.\n{question}\nRemember to answer as follows:\n\n<think> reasoning process </think>\n\\boxed{{final_answer}}",
                     }
                 ],
                 "ability": "math",

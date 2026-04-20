@@ -46,7 +46,7 @@ def default_compute_score(
     if data_source == "dummy_task":
 
         def verify_format_correctness(sol: str):
-            pattern = r"^<think>(?!.*<think>)(.*?)</think>\n<answer>\s*\\boxed\{(.*?)\}\s*</answer>$"
+            pattern = r"^<think>(?!.*<think>)(.*?)</think>\s*\\boxed\{(.*?)\}$"
             match = re.match(pattern, sol, re.DOTALL | re.MULTILINE)
             return True if match else False
 

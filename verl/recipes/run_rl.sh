@@ -27,6 +27,9 @@ elif [ "$MODEL_NAME" == "qwm" ]; then
 elif [ "$MODEL_NAME" == "qwm_nmtron" ]; then
     MODEL_PATH="BayesRL/qwm7b_nmtron_ivon"
     TRAIN_DATA="$DATA_ROOT/qwm-instruct-${DATA_NAME}-train.parquet"
+elif [ "$MODEL_NAME" == "olmo3_nmtron" ]; then
+    MODEL_PATH="BayesRL/olmo3_nmtron_ivon"
+    TRAIN_DATA="$DATA_ROOT/olmo3-instruct-${DATA_NAME}-train.parquet"
 else
     MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-Math-7B"}
 fi
