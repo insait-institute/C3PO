@@ -7,7 +7,6 @@
 **/*.tar.gz
 **/playground
 **/wandb
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -131,3 +130,6 @@ outputs
 **/evals/*.md
 
 perp_results
+
+evals/completed_runs.txt
+evals/eval_preds

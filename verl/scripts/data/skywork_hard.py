@@ -14,11 +14,26 @@ mapping = {
 NUM_WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else 1
 
 
+def replace_answer_prompt(example):
+    math_question = example["prompt"][-1]["content"]
+    example["prompt"] = [
+        {
+            "role": "user",
+            "content": f"Solve the following math problem. You must first think about your reasoning process and enclose it reasoning process within <think> and </think> tags, followed by your final answer within \\boxed{{}}. Any other format will be immediately rejected.\n{math_question}\nRemember to answer as follows:\n\n<think> reasoning process </think> \\boxed{{final_answer}}",
+        },
+        {
+            "role": "assistant",
+            "content": "<think>\n",
+        },
+    ]
+    return example
+
+
 def tokenize_and_filter(example):
     prompt = tok.apply_chat_template(
         example["prompt"],
         tokenize=True,
-        add_generation_prompt=True,
+        add_generation_prompt=False,
         return_dict=True,
         return_tensors="pt",
     )
@@ -40,11 +55,12 @@ def main(args):
     data = data.filter(difficulty_filter, num_proc=NUM_WORKERS)
     data = data.filter(tokenize_and_filter, num_proc=NUM_WORKERS)
     data = data.map(edit_data_source, num_proc=NUM_WORKERS)
+    data = data.map(replace_answer_prompt, num_proc=NUM_WORKERS)
     save_dir = Path(__file__).parents[2] / "data"
-    save_name = f"{args.model}-skywork-hard-train.parquet"
+    save_name = f"{args.model}-instruct-skywork-hard-train.parquet"
     if args.max_rows is not None:
         data = data.shuffle(seed=42).select(range(args.max_rows))
-        save_name = f"{args.model}-skywork-hard-dc{args.max_rows}-train.parquet"
+        save_name = f"{args.model}-instruct-skywork-hard-dc{args.max_rows}-train.parquet"
     data.to_parquet(save_dir / save_name)
 
 

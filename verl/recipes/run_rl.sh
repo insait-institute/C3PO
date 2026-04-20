@@ -30,8 +30,12 @@ elif [ "$MODEL_NAME" == "qwm_nmtron" ]; then
 elif [ "$MODEL_NAME" == "olmo3_nmtron" ]; then
     MODEL_PATH="BayesRL/olmo3_nmtron_ivon"
     TRAIN_DATA="$DATA_ROOT/olmo3-instruct-${DATA_NAME}-train.parquet"
+elif [ "$MODEL_NAME" == "llama_nmtron" ]; then
+    MODEL_PATH="BayesRL/llama_nmtron_ivon"
+    TRAIN_DATA="$DATA_ROOT/llama-instruct-${DATA_NAME}-train.parquet"
 else
     MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-Math-7B"}
+    TRAIN_DATA="$DATA_ROOT/qwm-base-${DATA_NAME}-train.parquet"
 fi
 TOKENIZER_PATH=${TOKENIZER_PATH:-$DEFAULT_TOKENIZER_PATH}
 IVON_INIT_METHOD=${IVON_INIT_METHOD:-"scratch"} # scratch or trained
@@ -166,6 +170,9 @@ EVAL_FREQ=28
 if [[ $DATA_NAME == "dapomath-dc1024" ]]; then
     LR_WARMUP_STEPS=7
     EVAL_FREQ=16
+elif [[ $DATA_NAME == "skywork_hard" ]]; then
+    LR_WARMUP_STEPS=10
+    EVAL_FREQ=10
 fi
 
 SAVE_FREQ=${SAVE_FREQ:-0.25}
@@ -235,7 +242,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
     actor_rollout_ref.rollout.val_kwargs.top_k=50 \
-    actor_rollout_ref.rollout.val_kwargs.n=1 \
+    actor_rollout_ref.rollout.val_kwargs.n=8 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     critic.model.tokenizer_path=$TOKENIZER_PATH \
     trainer.default_local_dir=$SAVE_PATH \
