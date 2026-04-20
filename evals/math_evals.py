@@ -14,7 +14,6 @@ from typing import Any, Dict, List
 import constants
 import numpy as np
 import torch
-import wandb
 import yaml
 from datasets import Dataset, Value, concatenate_datasets, load_dataset
 from formatter import BaseFormatter, get_formatter_mapping
@@ -22,6 +21,19 @@ from math_verify import parse, verify
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
+
+import wandb
+
+
+class TimeoutWarningFilter(logging.Filter):
+    def filter(self, record):
+        if "Timeout is disabled" in record.getMessage() and "prevent code getting stuck" in record.getMessage():
+            return False
+        return True
+
+
+logging.getLogger("math_verify.parser").addFilter(TimeoutWarningFilter())
+logging.getLogger("math_verify.grader").addFilter(TimeoutWarningFilter())
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
@@ -93,7 +105,7 @@ def _prompt_map_fn(example, add_open_think):
     return example
 
 
-class TimeoutException(Exception):
+class TimeoutException(BaseException):
     pass
 
 
@@ -106,27 +118,48 @@ def _evaluate_single(args):
     sample_scores = []
     parsed_preds = []
 
+    debug_dir = Path(__file__).parents[0] / "eval_debug_logs"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
+    def _debug(msg):
+        with open(debug_dir / f"eval_debug_{pid}.log", "a") as f:
+            f.write(msg + "\n")
+
+    _debug(f"Starting new prompt: {len(preds)} preds")
+
     # Configure signal handler for timeout
     signal.signal(signal.SIGALRM, _timeout_handler)
 
     try:
         if ref is not None:
+            _debug("Parsing ref...")
             # Allow up to 10s for reference parsing
             signal.setitimer(signal.ITIMER_REAL, 10.0)
             ref_parsed = parse(ref, parsing_timeout=10)
             signal.setitimer(signal.ITIMER_REAL, 0)
+            _debug("Ref parsed.")
         else:
             ref_parsed = None
-    except Exception:
+    except (Exception, TimeoutException):
         signal.setitimer(signal.ITIMER_REAL, 0)
         ref_parsed = None
+        _debug("Ref parsing failed.")
 
-    for p in preds:
+    for i, p in enumerate(preds):
+        if i % 100 == 0:
+            _debug(f"Progress: {i}/{len(preds)}")
+            try:
+                from sympy.core.cache import clear_cache
+                clear_cache()
+            except Exception:
+                pass
         try:
+            _debug(f"[{i}] Parsing...")
             # 10s maximum for parsing
             signal.setitimer(signal.ITIMER_REAL, 10.0)
             p_parsed = parse(p, parsing_timeout=10)[0]
-
+            
+            _debug(f"[{i}] Verifying...")
             # Use provided timeout for verification
             signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
             is_correct = verify(ref_parsed, p_parsed, timeout_seconds=None)
@@ -135,27 +168,52 @@ def _evaluate_single(args):
 
             parsed_preds.append(p_parsed)
             sample_scores.append(is_correct)
-        except Exception:
+            _debug(f"[{i}] Done.")
+        except (Exception, TimeoutException) as e:
             signal.setitimer(signal.ITIMER_REAL, 0)
             parsed_preds.append(None)
             sample_scores.append(False)
+            _debug(f"[{i}] Exception: {type(e).__name__} - {str(e)}")
 
     valid_parsed = [p for p in parsed_preds if p is not None]
 
     try:
+        from sympy.core.cache import clear_cache
+        clear_cache()
+    except Exception:
+        pass
+
+    try:
         if valid_parsed:
+            _debug("Starting majority vote string formatting...")
             # We wrap this in try-except because sympy's str() and evalf() can occasionally
             # raise exceptions like ZeroDivisionError on mathematically malformed inputs.
-            str_preds = [str(p) for p in valid_parsed]
+            str_preds = []
+            for j, p in enumerate(valid_parsed):
+                if j % 500 == 0:
+                    _debug(f"str formatting: {j}/{len(valid_parsed)}")
+                try:
+                    signal.setitimer(signal.ITIMER_REAL, 5.0)
+                    s = str(p)
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                except Exception:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                    s = "error"
+                str_preds.append(s)
+
+            _debug("Running Counter...")
             counts = Counter(str_preds)
             majority_answer_str = counts.most_common(1)[0][0]
 
+            _debug("Finding orig idx...")
             representative_idx = str_preds.index(majority_answer_str)
             orig_idx = [i for i, x in enumerate(parsed_preds) if x is not None][representative_idx]
             majority_score = sample_scores[orig_idx]
+            _debug("Majority finished.")
         else:
             majority_score = False
     except Exception:
+        signal.setitimer(signal.ITIMER_REAL, 0)
         majority_score = False
 
     return sample_scores, majority_score
@@ -188,6 +246,8 @@ class MathEvalEngine:
             standardized = standardized.cast_column("id", Value("string"))
             if "data_source" not in standardized.column_names:
                 standardized = standardized.add_column("data_source", [name] * len(standardized))
+            standardized = standardized.remove_columns("id")
+            standardized = standardized.add_column("id", [f"{name}_{i}" for i in range(len(standardized))])
             processed_list.append(standardized)
 
         data = concatenate_datasets(processed_list)
@@ -248,7 +308,7 @@ class MathEvalEngine:
 
         args_iter = ((preds, ref, timeout_seconds) for preds, ref in zip(predictions, references))
 
-        with multiprocessing.Pool(NUM_WORKERS) as pool:
+        with multiprocessing.Pool(NUM_WORKERS, maxtasksperchild=1) as pool:
             # We use pool.imap to keep order and stream results for tqdm
             results = list(tqdm(pool.imap(_evaluate_single, args_iter), total=len(references), desc="Scoring..."))
 
@@ -337,9 +397,10 @@ class MathEvalEngine:
             "agg/maj_acc": global_metrics["maj"],
         }
 
-        powers_of_two = [2**j for j in range(16)]
+        powers_of_two = {2**j for j in range(16)}
         for k, v in global_metrics.get("bon", {}).items():
-            logs[f"agg/{k}"] = v
+            if int(k.split("_")[1]) in powers_of_two:
+                logs[f"agg/{k}"] = v
 
         # Per-dataset breakdown
         for source in np.unique(sources):
@@ -352,7 +413,8 @@ class MathEvalEngine:
                 f"stderr_{source}": m["stderr"],
             }
             for k, v in m.get("bon", {}).items():
-                source_logs[f"acc_{source}/{k}"] = v
+                if int(k.split("_")[1]) in powers_of_two:
+                    source_logs[f"acc_{source}/{k}"] = v
 
             logs.update(source_logs)
 
@@ -403,6 +465,14 @@ def main():
     #         pickle.dump(predictions, f)
     log.info("Evaluating predictions...")
     scores = engine.evaluate(predictions, dataset["answer"])
+
+    prompt_correctness = {}
+    for prompt_id, prompt_scores in zip(dataset["id"], scores["sample_scores"]):
+        prompt_correctness[prompt_id] = any(prompt_scores)
+
+    with open(save_dir / "eval_correctness.pkl", "wb") as f:
+        pickle.dump(prompt_correctness, f)
+
     engine.report_metrics(dataset, scores)
 
 
