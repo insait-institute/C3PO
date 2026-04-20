@@ -41,7 +41,11 @@ def tokenize_and_filter(example):
 
 
 def difficulty_filter(example):
-    return example["extra_info"]["model_difficulty"]["DeepSeek-R1-Distill-Qwen-7B"] == 16 and example["extra_info"]["model_difficulty"]["DeepSeek-R1-Distill-Qwen-32B"] != 16
+    return (
+        example["extra_info"]["model_difficulty"]["DeepSeek-R1-Distill-Qwen-7B"] == 16
+        and example["extra_info"]["model_difficulty"]["DeepSeek-R1-Distill-Qwen-32B"] != 16
+        and example["extra_info"]["model_difficulty"]["DeepSeek-R1-Distill-Qwen-1.5B"] == 16
+    )
 
 
 def edit_data_source(example):
