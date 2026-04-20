@@ -13,6 +13,7 @@ MODEL_NAME=${MODEL_NAME:-"olmo3"}
 MODEL_SIZE=${MODEL_SIZE:-"7B"}    
 DATA_NAME=${DATA_NAME:-"nmt"}
 OPTIMIZER=${OPTIMIZER:-"ivon"}
+PAD_TOKEN_ID=${PAD_TOKEN_ID:-null}
 
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 SAVE_ROOT=${SAVE_ROOT:-"${WORK}/bayesrl"}
@@ -37,6 +38,7 @@ elif [ "$MODEL_NAME" == "qwm" ]; then
 elif [ "$MODEL_NAME" == "llama" ]; then
     MODEL_PATH="meta-llama/Llama-3.1-${MODEL_SIZE}"
     TOKENIZER_PATH="meta-llama/Llama-3.1-${MODEL_SIZE}-Instruct"
+    PAD_TOKEN_ID=128011
 else
     MODEL_PATH=$MODEL_NAME
     TOKENIZER_PATH=$MODEL_NAME
@@ -113,6 +115,7 @@ torchrun --nnodes=$nnodes \
     model.use_liger=true \
     model.fsdp_config.model_dtype=bfloat16 \
     model.fsdp_config.cpu_offload=false \
+    model.pad_token_id=$PAD_TOKEN_ID \
     trainer.default_local_dir=$SAVE_PATH \
     trainer.project_name=$project_name \
     trainer.experiment_name=$EXPNAME \

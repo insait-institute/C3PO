@@ -48,6 +48,7 @@ model:
   target_modules: all-linear  # Target modules for LoRA adaptation
   use_liger: False
   strategy: fsdp2
+  pad_token_id: null
 optim:
   lr: 1e-5
   betas: [0.9, 0.95]

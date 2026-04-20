@@ -800,7 +800,11 @@ def run_sft(config):
 
     local_model_path = copy_to_local(src=config.model.partial_pretrain, verbose=True)
     tokenizer = hf_tokenizer(config.data.get("tokenizer_path", local_model_path), trust_remote_code=config.model.trust_remote_code)
-    assert tokenizer.eos_token_id != tokenizer.pad_token_id, f"Tokenizer should have different eos and pad tokens for SFT, found both to be {tokenizer.eos_token_id}"
+    if tokenizer.eos_token_id == tokenizer.pad_token_id:
+        if config.model.pad_token_id is None:
+            raise ValueError(f"Tokenizer should have different eos and pad tokens for SFT, found both to be {tokenizer.eos_token_id}.")
+        else:
+            tokenizer.pad_token_id = config.model.pad_token_id
     train_dataset = create_sft_dataset(config.data.train_files, config.data, tokenizer, max_samples=config.data.get("train_max_samples", -1))
     if config.data.val_files:
         val_dataset = create_sft_dataset(config.data.val_files, config.data, tokenizer, max_samples=config.data.get("val_max_samples", -1))
