@@ -9,6 +9,7 @@ NUM_WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") e
 mapping = {
     "olmo3": "allenai/Olmo-3-7B-Instruct-DPO",
     "qwm": "Qwen/Qwen2.5-Math-7B-Instruct",
+    "llama": "meta-llama/Llama-3.1-8B-Instruct",
 }
 
 
