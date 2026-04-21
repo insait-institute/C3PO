@@ -1326,14 +1326,6 @@ class RayPPOTrainer:
                     batch: DataProto = DataProto.from_single_dict(batch_dict)
                     batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
 
-                    # If IVON, add the noise to the actor parameters and sync weights
-                    if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
-                        with marked_timer("noise_actor", timing_raw, color="red"):
-                            self.actor_rollout_wg.noise_actor()
-
-                    with marked_timer("update_weights", timing_raw, color="red"):
-                        self.checkpoint_manager.update_weights()
-
                     # add uid to batch
                     batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
 
@@ -1341,23 +1333,76 @@ class RayPPOTrainer:
 
                     # pass global_steps to trace
                     gen_batch.meta_info["global_steps"] = self.global_steps
-                    gen_batch_output = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
-
+                    n_total = self.config.actor_rollout_ref.rollout.n
+                    M = self.config.actor_rollout_ref.rollout.M
+                    n_per_iter = n_total // M
+                    gen_batch_output = gen_batch.repeat(repeat_times=n_per_iter, interleave=True)
+                    print(f"----Gen Batch Output (Prior to actual generation)\n\n{gen_batch_output}\n\n------")
                     is_last_step = self.global_steps >= self.total_training_steps
                     with marked_timer("step", timing_raw):
-                        # generate a batch
+                        gen_buffer = []
                         with marked_timer("gen", timing_raw, color="red"):
-                            if not self.async_rollout_mode:
-                                gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch_output)
-                            else:
-                                if curr_step_profile:
-                                    self.async_rollout_manager.start_profile()
-                                gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch_output)
-                                self.checkpoint_manager.sleep_replicas()
-                                if curr_step_profile:
-                                    self.async_rollout_manager.stop_profile()
-                            timing_raw.update(gen_batch_output.meta_info["timing"])
-                            gen_batch_output.meta_info.pop("timing", None)
+                            for rollout_num in range(M):
+                                print(f"---- Generating rollout_num={rollout_num} batch------")
+                                # If IVON, add the noise to the actor parameters and sync weights
+                                if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
+                                    with marked_timer("noise_actor", timing_raw, color="red"):
+                                        self.actor_rollout_wg.noise_actor()
+
+                                with marked_timer("update_weights", timing_raw, color="red"):
+                                    self.checkpoint_manager.update_weights()
+
+                                if not self.async_rollout_mode:
+                                    m_gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch_output)
+                                else:
+                                    if curr_step_profile:
+                                        self.async_rollout_manager.start_profile()
+                                    m_gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch_output)
+                                    self.checkpoint_manager.sleep_replicas()
+                                    if curr_step_profile:
+                                        self.async_rollout_manager.stop_profile()
+                                gen_buffer.append(m_gen_batch_output)
+
+                                # If IVON, denoise the actor parameters and sync weights
+                                if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and (
+                                    self.config.actor_rollout_ref.actor.optim.ivon_config.use_ivon_rollout_only or M > 1
+                                ):
+                                    with marked_timer("denoise_actor", timing_raw, color="red"):
+                                        self.actor_rollout_wg.denoise_actor()
+
+                            # Collect timing info from each iteration before concatenating
+                            for m_output in gen_buffer:
+                                if "timing" in m_output.meta_info:
+                                    timing_raw.update(m_output.meta_info["timing"])
+                                    m_output.meta_info.pop("timing", None)
+
+                            # Concatenate the M rollout batches into a single DataProto.
+                            # Each batch has shape [num_prompts * n_per_iter] with interleaved
+                            # ordering: [p0*n_per_iter, p1*n_per_iter, ...].
+                            # After concat of M such batches we get:
+                            #   [p0*n_per_iter, p1*n_per_iter, ..., pK*n_per_iter,  <- iter 0
+                            #    p0*n_per_iter, p1*n_per_iter, ..., pK*n_per_iter,  <- iter 1
+                            #    ...]
+                            # But batch.repeat(n, interleave=True) expects:
+                            #   [p0*n, p1*n, ..., pK*n]
+                            # So we reorder to group all n responses per prompt together.
+                            gen_buffer_concat = DataProto.concat(gen_buffer)
+
+                            if M > 1:
+                                num_prompts = len(gen_batch)
+                                # Build reorder indices: for each prompt, gather its n_per_iter
+                                # responses from each of the M iterations.
+                                reorder_indices = []
+                                for p in range(num_prompts):
+                                    for m in range(M):
+                                        # In iteration m, prompt p's responses are at positions:
+                                        # m * (num_prompts * n_per_iter) + p * n_per_iter ... + n_per_iter - 1
+                                        start = m * (num_prompts * n_per_iter) + p * n_per_iter
+                                        reorder_indices.extend(range(start, start + n_per_iter))
+                                reorder_indices = torch.tensor(reorder_indices, dtype=torch.long)
+                                gen_buffer_concat.reorder(reorder_indices)
+
+                        print(f"----Gen Buffer (After actual generation)\n\n{gen_buffer_concat}\n\n------")
 
                         if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                             with marked_timer("gen_max", timing_raw, color="purple"):
@@ -1394,8 +1439,13 @@ class RayPPOTrainer:
 
                                 del rm_scores, gen_baseline_batch, gen_baseline_output
                         # repeat to align with repeated responses in rollout
-                        batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
-                        batch = batch.union(gen_batch_output)
+                        batch = batch.repeat(repeat_times=n_total, interleave=True)
+                        batch = batch.union(gen_buffer_concat)
+
+                        # now noise the actor again. This noise will be propagated to both pi_rollout and pi_theta
+                        if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
+                            with marked_timer("noise_actor", timing_raw, color="red"):
+                                self.actor_rollout_wg.noise_actor()
 
                         if "response_mask" not in batch.batch.keys():
                             batch.batch["response_mask"] = compute_response_mask(batch)

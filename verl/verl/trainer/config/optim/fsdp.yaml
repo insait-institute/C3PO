@@ -64,3 +64,4 @@ ivon_config:
   ess_schedule: constant
   min_ess_ratio: 0.1
   min_ess: null
+  use_ivon_rollout_only: false
