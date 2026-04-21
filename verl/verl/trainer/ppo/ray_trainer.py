@@ -1439,7 +1439,7 @@ class RayPPOTrainer:
                         batch = batch.union(gen_buffer_concat)
 
                         # now noise the actor again. This noise will be propagated to both pi_rollout and pi_theta
-                        if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
+                        if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and M > 1:
                             with marked_timer("noise_actor", timing_raw, color="red"):
                                 self.actor_rollout_wg.noise_actor()
 

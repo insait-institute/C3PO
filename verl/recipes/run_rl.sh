@@ -88,6 +88,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
     ESS=${ESS:-1e9}
     ESS_SCHEDULE=${ESS_SCHEDULE:-"constant"}
     MIN_ESS=${MIN_ESS:-$ESS}
+    EXPLORATION_M=${EXPLORATION_M:-1}
 else
     BETAS=${BETAS:-"[0.9,0.999]"}
 fi
@@ -127,6 +128,12 @@ if [ "$MIN_ESS" != "$ESS" ] && [ "$OPTIMIZER" == "ivon" ]; then
 fi
 if [ "$MC_SAMPLES" != 1 ]; then
     EXPNAME="${EXPNAME}-MCSAMPLES${MC_SAMPLES}"
+fi
+if (( "$EXPLORATION_M" > 1 )); then
+    BYPASS_MODE=false
+    EXPNAME="${EXPNAME}-interleave${EXPLORATION_M}"
+else
+    BYPASS_MODE=true
 fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
@@ -191,7 +198,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.kl_ctrl.kl_coef=$KL_COEF \
     algorithm.rollout_correction.rollout_is=sequence \
-    algorithm.rollout_correction.bypass_mode=True \
+    algorithm.rollout_correction.bypass_mode=$BYPASS_MODE \
     algorithm.rollout_correction.loss_type=ppo_clip \
     data.train_files=$TRAIN_DATA \
     data.val_files=$EVAL_DATA \
@@ -236,8 +243,8 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
     actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.temperature=1.0 \
-    actor_rollout_ref.rollout.n=4 \
-    actor_rollout_ref.rollout.M=4 \
+    actor_rollout_ref.rollout.n=$GROUP_SIZE \
+    actor_rollout_ref.rollout.M=$EXPLORATION_M \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=3072 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
