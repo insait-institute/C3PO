@@ -1337,13 +1337,11 @@ class RayPPOTrainer:
                     M = self.config.actor_rollout_ref.rollout.M
                     n_per_iter = n_total // M
                     gen_batch_output = gen_batch.repeat(repeat_times=n_per_iter, interleave=True)
-                    print(f"----Gen Batch Output (Prior to actual generation)\n\n{gen_batch_output}\n\n------")
                     is_last_step = self.global_steps >= self.total_training_steps
                     with marked_timer("step", timing_raw):
                         gen_buffer = []
                         with marked_timer("gen", timing_raw, color="red"):
                             for rollout_num in range(M):
-                                print(f"---- Generating rollout_num={rollout_num} batch------")
                                 # If IVON, add the noise to the actor parameters and sync weights
                                 if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
                                     with marked_timer("noise_actor", timing_raw, color="red"):
@@ -1401,8 +1399,6 @@ class RayPPOTrainer:
                                         reorder_indices.extend(range(start, start + n_per_iter))
                                 reorder_indices = torch.tensor(reorder_indices, dtype=torch.long)
                                 gen_buffer_concat.reorder(reorder_indices)
-
-                        print(f"----Gen Buffer (After actual generation)\n\n{gen_buffer_concat}\n\n------")
 
                         if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                             with marked_timer("gen_max", timing_raw, color="purple"):
