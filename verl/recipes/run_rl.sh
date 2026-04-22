@@ -174,10 +174,10 @@ fi
 
 LR_WARMUP_STEPS=34
 EVAL_FREQ=28
-if [[ $DATA_NAME == "dapomath-dc1024" ]]; then
+if [[ "$DATA_NAME" == "dapomath-dc1024" ]]; then
     LR_WARMUP_STEPS=7
     EVAL_FREQ=16
-elif [[ $DATA_NAME == "skywork_hard" ]]; then
+elif [[ "$DATA_NAME" == "skywork_hard" ]]; then
     LR_WARMUP_STEPS=10
     EVAL_FREQ=10
 fi
