@@ -130,8 +130,8 @@ if [ "$MC_SAMPLES" != 1 ]; then
     EXPNAME="${EXPNAME}-MCSAMPLES${MC_SAMPLES}"
 fi
 if (( "$EXPLORATION_M" > 1 )); then
-    BYPASS_MODE=false
-    EXPNAME="${EXPNAME}-interleave${EXPLORATION_M}"
+    # BYPASS_MODE=false
+    EXPNAME="${EXPNAME}-interleave${EXPLORATION_M}-seqmis"
 else
     BYPASS_MODE=true
 fi
@@ -198,6 +198,9 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.kl_ctrl.kl_coef=$KL_COEF \
     algorithm.rollout_correction.rollout_is=sequence \
+    algorithm.rollout_correction.rollout_rs_threshold=2.0 \
+    algorithm.rollout_correction.rollout_rs=seq_sum_k1 \
+    algorithm.rollout_correction.rollout_rs_threshold="0.5_2.0" \
     algorithm.rollout_correction.bypass_mode=true \
     algorithm.rollout_correction.loss_type=ppo_clip \
     data.train_files=$TRAIN_DATA \

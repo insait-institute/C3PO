@@ -142,8 +142,7 @@ class MegatronPPOActor(BasePPOActor):
         if self.use_fused_kernels and not getattr(self.config, "overlap_moe_expert_parallel_comm", False):
             # do not patch if overlap_moe_expert_parallel_comm is enabled
             logger.warning_once(
-                "Recommend to disable use_fused_kernels since the fused kernel's performance is broken for triton>=3.3"
-                "Unless you are using a very old version of triton < 3.3"
+                "Recommend to disable use_fused_kernels since the fused kernel's performance is broken for triton>=3.3Unless you are using a very old version of triton < 3.3"
             )
             from verl.models.mcore.model_forward_fused import patch_fused_forward
 
@@ -222,9 +221,7 @@ class MegatronPPOActor(BasePPOActor):
             assert max_token_len is not None, "max_token_len must be set when use_dynamic_bsz is True"
             max_token_len = max_token_len * self.config.megatron.context_parallel_size
         else:
-            assert micro_batch_size is not None, (
-                "micro batch size is needed for forward compute when use_dynamic_bsz is False"
-            )
+            assert micro_batch_size is not None, "micro batch size is needed for forward compute when use_dynamic_bsz is False"
 
         def compute_logprobs_fn(output, data, use_dynamic_bsz=False, indices=None):
             response = data["responses"]
@@ -274,9 +271,7 @@ class MegatronPPOActor(BasePPOActor):
                         revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
                         log_probs = log_probs[revert_indices]
                 else:
-                    log_probs = torch.empty(
-                        size=(batch_size, response_length), dtype=torch.float32, device=input_ids.device
-                    )
+                    log_probs = torch.empty(size=(batch_size, response_length), dtype=torch.float32, device=input_ids.device)
                 log_probs = log_probs.to(get_device_id())
                 # broadcast across pp ranks
                 torch.distributed.broadcast(
@@ -298,9 +293,7 @@ class MegatronPPOActor(BasePPOActor):
                             revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
                             entropys = entropys[revert_indices]
                     else:
-                        entropys = torch.empty(
-                            size=(batch_size, response_length), dtype=torch.float32, device=input_ids.device
-                        )
+                        entropys = torch.empty(size=(batch_size, response_length), dtype=torch.float32, device=input_ids.device)
                     # broadcast across pp ranks
                     entropys = entropys.to(get_device_id())
                     torch.distributed.broadcast(
@@ -421,14 +414,10 @@ class MegatronPPOActor(BasePPOActor):
         self.has_multi_modal_inputs = "multi_modal_inputs" in mini_batch.non_tensor_batch.keys()
         if self.has_multi_modal_inputs:
             mini_batch.batch["multi_modal_inputs"] = mini_batch.non_tensor_batch["multi_modal_inputs"]
-            mini_batch.batch["multi_modal_inputs_idx"] = torch.Tensor(
-                list(range(len(mini_batch.non_tensor_batch["multi_modal_inputs"])))
-            ).to(torch.int64)
+            mini_batch.batch["multi_modal_inputs_idx"] = torch.Tensor(list(range(len(mini_batch.non_tensor_batch["multi_modal_inputs"])))).to(torch.int64)
 
         if mini_batch.batch["position_ids"].dim() == 3:  # qwen2vl mrope [bs, 3, seq_len]
-            mini_batch.batch["position_ids"] = mini_batch.batch["position_ids"][
-                :, 0
-            ]  # mcore patch recompute qwen2vl's pos ids during forward
+            mini_batch.batch["position_ids"] = mini_batch.batch["position_ids"][:, 0]  # mcore patch recompute qwen2vl's pos ids during forward
 
         indices = None
         temperature = data.meta_info["temperature"]
@@ -443,16 +432,13 @@ class MegatronPPOActor(BasePPOActor):
                     max_token_len=max_token_len,
                 )
                 assert len(micro_batches) % self.tf_config.microbatch_group_size_per_vp_stage == 0, (
-                    f"micro_batches {micro_batches} must be divisible by microbatch_group_size_per_vp_stage "
-                    f"{microbatch_group_size_per_vp_stage} for megatron backend"
+                    f"micro_batches {micro_batches} must be divisible by microbatch_group_size_per_vp_stage {microbatch_group_size_per_vp_stage} for megatron backend"
                 )
             else:
                 micro_batches, indices = rearrange_micro_batches(batch=mini_batch.batch, max_token_len=max_token_len)
             total_seqlen = max_token_len
         else:
-            assert micro_batch_size is not None, (
-                "micro_batch_size is needed to be passed in when not using dynamic batch size"
-            )
+            assert micro_batch_size is not None, "micro_batch_size is needed to be passed in when not using dynamic batch size"
             micro_batches = mini_batch.batch.split(micro_batch_size)
             seq_len = micro_batches[0]["input_ids"].shape[1]
             total_seqlen = micro_batch_size * seq_len
@@ -571,9 +557,7 @@ class MegatronPPOActor(BasePPOActor):
                 return_schedule_plan: whether to return the schedule plan, for 1f1b overlap
             """
             if return_schedule_plan:
-                assert self.tf_config.overlap_moe_expert_parallel_comm, (
-                    "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
-                )
+                assert self.tf_config.overlap_moe_expert_parallel_comm, "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
                 # TODO: Fix this
                 assert not calculate_entropy, "calculate_entropy must be disabled to return the schedule plan"
                 from megatron.core.models.gpt.gpt_model import GPTModel
@@ -686,9 +670,7 @@ class MegatronPPOActor(BasePPOActor):
                 }
 
             if RouterReplayHelper.is_r2_record_action(self.tf_config, vp_rank):
-                merge_router_topk_indices(
-                    attention_mask, input_ids, self.mini_layer_topk_idx_list, self.tf_config, vp_rank
-                )
+                merge_router_topk_indices(attention_mask, input_ids, self.mini_layer_topk_idx_list, self.tf_config, vp_rank)
 
             if RouterReplayHelper.is_replay_forward_action(self.tf_config, vp_rank):
                 router_instance_list = RouterReplayHelper.get_micro_batch_router_list(self.tf_config, vp_rank)
@@ -738,9 +720,7 @@ class MegatronPPOActor(BasePPOActor):
                 vp_size = len(self.actor_module)
                 microbatch_group_size_per_vp_stage = self.tf_config.microbatch_group_size_per_vp_stage
                 bs = n_micro_batch
-                losses_reduced["mini_layer_topk_idx_tensor"] = reorder_and_merge_vpp_layers(
-                    self.mini_layer_topk_idx_list, bs, vp_size, microbatch_group_size_per_vp_stage
-                )
+                losses_reduced["mini_layer_topk_idx_tensor"] = reorder_and_merge_vpp_layers(self.mini_layer_topk_idx_list, bs, vp_size, microbatch_group_size_per_vp_stage)
             else:
                 losses_reduced["mini_layer_topk_idx_tensor"] = torch.cat(self.mini_layer_topk_idx_list, dim=0)
             self.mini_layer_topk_idx_list = []

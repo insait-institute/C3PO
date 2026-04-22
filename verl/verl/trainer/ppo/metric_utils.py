@@ -140,8 +140,12 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, granular_sco
     if use_critic:
         values = batch.batch["values"]
         valid_values = torch.masked_select(values, response_mask)
-        return_diff_var = torch.var(valid_returns - valid_values)
-        return_var = torch.var(valid_returns)
+        if valid_values.numel() > 1:
+            return_diff_var = torch.var(valid_returns - valid_values)
+            return_var = torch.var(valid_returns)
+        else:
+            return_diff_var = torch.tensor(0.0)
+            return_var = torch.tensor(1.0) # avoid division by zero
 
     # Aborted samples and non-aborted response length statistics
     # response_length_non_aborted/*: statistics computed on non-aborted samples only
@@ -160,6 +164,10 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, granular_sco
         for k in granular_score_keys:
             granular_scores[k] = torch.Tensor([x[k] for x in batch.non_tensor_batch["reward_extra_info"]])
 
+    def safe_mean(t): return torch.mean(t).detach().item() if t.numel() > 0 else 0.0
+    def safe_max(t): return torch.max(t).detach().item() if t.numel() > 0 else 0.0
+    def safe_min(t): return torch.min(t).detach().item() if t.numel() > 0 else 0.0
+
     metrics = {
         # score
         "critic/score/mean": score_mean,
@@ -170,19 +178,19 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, granular_sco
         # "critic/rewards/max": reward_max,
         # "critic/rewards/min": reward_min,
         # adv
-        "critic/advantages/mean": torch.mean(valid_adv).detach().item(),
-        "critic/advantages/max": torch.max(valid_adv).detach().item(),
-        "critic/advantages/min": torch.min(valid_adv).detach().item(),
+        "critic/advantages/mean": safe_mean(valid_adv),
+        "critic/advantages/max": safe_max(valid_adv),
+        "critic/advantages/min": safe_min(valid_adv),
         # returns
-        # "critic/returns/mean": torch.mean(valid_returns).detach().item(),
-        # "critic/returns/max": torch.max(valid_returns).detach().item(),
-        # "critic/returns/min": torch.min(valid_returns).detach().item(),
+        # "critic/returns/mean": safe_mean(valid_returns),
+        # "critic/returns/max": safe_max(valid_returns),
+        # "critic/returns/min": safe_min(valid_returns),
         **(
             {
                 # values
-                "critic/values/mean": torch.mean(valid_values).detach().item(),
-                "critic/values/max": torch.max(valid_values).detach().item(),
-                "critic/values/min": torch.min(valid_values).detach().item(),
+                "critic/values/mean": safe_mean(valid_values),
+                "critic/values/max": safe_max(valid_values),
+                "critic/values/min": safe_min(valid_values),
                 # vf explained var
                 "critic/vf_explained_var": (1.0 - return_diff_var / (return_var + 1e-5)).detach().item(),
             }

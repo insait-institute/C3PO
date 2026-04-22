@@ -398,7 +398,7 @@ def compute_rs_metrics(
         apply_lower_threshold: Whether to mask/log metrics for values below the lower threshold.
     """
     if not response_mask.any():
-        raise ValueError("response_mask must contain at least one valid token (1).")
+        return {}
 
     metrics: dict[str, float] = {}
     prefix = f"rollout_rs_{option_name}"
@@ -624,7 +624,7 @@ def compute_is_metrics(
         Dictionary of IS weight metrics (all scalars).
     """
     if not response_mask.any():
-        raise ValueError("response_mask must contain at least one valid token (1).")
+        return {}
 
     metrics: dict[str, float] = {}
     device: torch.device = rollout_is_weights.device
@@ -765,7 +765,7 @@ def compute_rollout_correction_and_rejection_mask(
     """
     # Validate input masks
     if not response_mask.any():
-        raise ValueError("response_mask must contain at least one valid token (1).")
+        return None, response_mask, {}
     if old_log_prob.shape != rollout_log_prob.shape:
         raise ValueError(
             f"old_log_prob shape {old_log_prob.shape} does not match rollout_log_prob shape {rollout_log_prob.shape}."
@@ -867,7 +867,8 @@ def compute_offpolicy_metrics(
         Dictionary of off-policy metrics (without prefix)
     """
     # Validate that we have at least one valid token
-    assert response_mask.any(), "Expected at least one valid token in response_mask"
+    if not response_mask.any():
+        return {}
 
     metrics = {}
 

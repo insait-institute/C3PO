@@ -591,9 +591,10 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # Skip if using bypass_mode loss (metrics already computed in pg_metrics)
                     rollout_log_prob = model_inputs.get("rollout_log_probs", None)
-                    if loss_mode != "bypass_mode" and rollout_log_prob is not None:
+                    if loss_mode != "bypass_mode" and rollout_log_prob is not None and response_mask.any():
                         # Compute metrics using CURRENT policy π_θ vs π_rollout
                         # Tracks evolving off-policy gap as π_θ updates during mini-batch training
+                        # Guard: skip when micro-batch has no valid response tokens (all-zero mask)
                         from verl.trainer.ppo.rollout_corr_helper import compute_rollout_corr_metrics_from_logprobs
 
                         rollout_corr_metrics = compute_rollout_corr_metrics_from_logprobs(
