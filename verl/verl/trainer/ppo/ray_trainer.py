@@ -917,7 +917,9 @@ class RayPPOTrainer:
         print(f"local_global_step_folder: {local_global_step_folder}")
         actor_local_path = os.path.join(local_global_step_folder, "actor")
 
-        actor_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "actor")
+        actor_remote_path = (
+            None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "actor")
+        )
 
         remove_previous_ckpt_in_save = self.config.trainer.get("remove_previous_ckpt_in_save", False)
         if remove_previous_ckpt_in_save:
@@ -929,7 +931,9 @@ class RayPPOTrainer:
 
         if self.use_critic:
             critic_local_path = os.path.join(local_global_step_folder, str(Role.Critic))
-            critic_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", str(Role.Critic))
+            critic_remote_path = (
+                None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", str(Role.Critic))
+            )
             self.critic_wg.save_checkpoint(critic_local_path, critic_remote_path, self.global_steps, max_ckpt_to_keep=max_critic_ckpt_to_keep)
 
         # save dataloader
@@ -1358,7 +1362,9 @@ class RayPPOTrainer:
                                 gen_buffer.append(m_gen_batch_output)
 
                                 # If IVON, denoise the actor parameters and sync weights
-                                if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and (self.config.actor_rollout_ref.actor.optim.ivon_config.use_ivon_rollout_only or M > 1):
+                                if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and (
+                                    self.config.actor_rollout_ref.actor.optim.ivon_config.use_ivon_rollout_only or M > 1
+                                ):
                                     with marked_timer("denoise_actor", timing_raw, color="red"):
                                         self.actor_rollout_wg.denoise_actor()
 
@@ -1436,8 +1442,9 @@ class RayPPOTrainer:
                         if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and M > 1:
                             with marked_timer("noise_actor", timing_raw, color="red"):
                                 self.actor_rollout_wg.noise_actor()
-                            with marked_timer("update_weights", timing_raw, color="red"):
-                                self.checkpoint_manager.update_weights()
+                            # with marked_timer("update_weights", timing_raw, color="red"):
+                            #     self.checkpoint_manager.update_weights()
+                            #     self.checkpoint_manager.sleep_replicas()
 
                         if "response_mask" not in batch.batch.keys():
                             batch.batch["response_mask"] = compute_response_mask(batch)
