@@ -30,11 +30,8 @@ import pandas as pd
 
 ROOT = Path(__file__).parents[0] / "eval_preds"
 BASE_DIR = ROOT / "olmo3_nmtron_ivon"           # base model
-TRAINED_DIRS = [
-    ROOT / "olmo3_nmtron_adamw_LR1.0_GS16",
-    ROOT / "olmo3_nmtron_ivon_LR1.0_GS16_ESS1e9",
-]
-
+TRAINED_DIRS = [x for x in ROOT.glob("olmo3_nmtron_*")]
+print(f"Found {len(TRAINED_DIRS)} directories")
 CONFIDENCE = 0.05   # zeta; 95% confidence bound from paper Appx. C.4
 K_EXPECTED = 4096   # samples per prompt
 
