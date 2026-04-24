@@ -468,7 +468,7 @@ def main():
 
     prompt_correctness = {}
     for prompt_id, prompt_scores in zip(dataset["id"], scores["sample_scores"]):
-        prompt_correctness[prompt_id] = any(prompt_scores)
+        prompt_correctness[prompt_id] = prompt_scores
 
     with open(save_dir / "eval_correctness.pkl", "wb") as f:
         pickle.dump(prompt_correctness, f)
