@@ -13,16 +13,27 @@ from typing import Any, Dict, List
 
 import constants
 import numpy as np
+import pandas as pd
 import torch
 import yaml
 from datasets import Dataset, Value, concatenate_datasets, load_dataset
 from formatter import BaseFormatter, get_formatter_mapping
+from huggingface_hub import hf_hub_download
+from ivon.ivon import IVON
 from math_verify import parse, verify
 from tqdm import tqdm
-from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import wandb
+from vllm import LLM, SamplingParams
+
+
+def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
+    if os.path.exists(path_or_repo):
+        path = os.path.join(path_or_repo, filename) if os.path.isdir(path_or_repo) else path_or_repo
+    else:
+        path = hf_hub_download(repo_id=path_or_repo, filename=filename)
+    return torch.load(path, map_location="cpu", mmap=True)
 
 
 class TimeoutWarningFilter(logging.Filter):
@@ -121,6 +132,7 @@ def _evaluate_single(args):
     debug_dir = Path(__file__).parents[0] / "eval_debug_logs"
     debug_dir.mkdir(parents=True, exist_ok=True)
     pid = os.getpid()
+
     def _debug(msg):
         with open(debug_dir / f"eval_debug_{pid}.log", "a") as f:
             f.write(msg + "\n")
@@ -150,6 +162,7 @@ def _evaluate_single(args):
             _debug(f"Progress: {i}/{len(preds)}")
             try:
                 from sympy.core.cache import clear_cache
+
                 clear_cache()
             except Exception:
                 pass
@@ -158,7 +171,7 @@ def _evaluate_single(args):
             # 10s maximum for parsing
             signal.setitimer(signal.ITIMER_REAL, 10.0)
             p_parsed = parse(p, parsing_timeout=10)[0]
-            
+
             _debug(f"[{i}] Verifying...")
             # Use provided timeout for verification
             signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
@@ -179,6 +192,7 @@ def _evaluate_single(args):
 
     try:
         from sympy.core.cache import clear_cache
+
         clear_cache()
     except Exception:
         pass
@@ -262,13 +276,14 @@ class MathEvalEngine:
     def _get_sampling_params(self, source_name: str) -> SamplingParams:
         """Merge default constants with hydra overrides and per-dataset settings."""
         base_params = constants.DEFAULT_SAMPLING_PARAMS.copy()
-        if "sampling" in self.cfg:
-            dataset_overrides = self.cfg.sampling.get(source_name, {})
+        if "sampling" in self.cfg and self.cfg.sampling is not None:
+            dataset_overrides = self.cfg.sampling.get(source_name, {}) or self.cfg.sampling.get("default", {})
             base_params.update(dataset_overrides)
+        base_params["n"] /= self.cfg.model.sample_model_freq
 
         return SamplingParams(**base_params)
 
-    def run_inference(self, dataset: Dataset) -> List[List[str]]:
+    def run_inference(self, dataset: Dataset) -> pd.DataFrame:
         log.info(f"Starting batch inference for {len(dataset)} prompts...")
 
         self.llm = LLM(
@@ -279,6 +294,18 @@ class MathEvalEngine:
             gpu_memory_utilization=0.95,
         )
 
+        optimizer = None
+        if self.cfg.model.sample_model_freq > 1:
+            model = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.bfloat16, device_map="cpu")
+            optimizer = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
+            optim_state_dict = _load_optim_state_dict(self.model_name)
+            optimizer.load_state_dict(optim_state_dict)
+            for group in optimizer.param_groups:
+                for key in ["momentum", "hess"]:
+                    if key in group:
+                        group[key] = group[key].to("cuda", dtype=torch.bfloat16)
+
+        prompt_ids = list(dataset["id"])
         prompts = list(dataset["prompt"])
         tokenizer_name = self.model_name
         if self.model_name == "allenai/Olmo-3-1025-7B" or "olmo3-base" in self.model_name:
@@ -295,8 +322,29 @@ class MathEvalEngine:
         )
         sampling_params_list = [self._get_sampling_params(source) for source in dataset["data_source"]]
 
-        outputs = self.llm.generate(prompts, sampling_params_list)
-        return [[res.text for res in output.outputs] for output in outputs]
+        # outputs[model_idx][prompt_idx] = List[str]
+        outputs = []
+        for i in range(self.cfg.model.sample_model_freq):
+            log.info(f"Running sampling pass {i + 1}...")
+            if optimizer:
+                with optimizer.sampled_params():
+                    llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                    for n, p in model.named_parameters():
+                        llm_model.load_weights([(n, p.data)])
+                local_outputs = self.llm.generate(prompts, sampling_params_list)
+                local_outputs = [[res.text for res in output.outputs] for output in local_outputs]
+            else:
+                local_outputs = self.llm.generate(prompts, sampling_params_list)
+                local_outputs = [[res.text for res in output.outputs] for output in local_outputs]
+            outputs.append(local_outputs)
+
+        rows = []
+        for model_idx, model_outputs in enumerate(outputs):
+            model_name = f"model_{model_idx + 1}"
+            for prompt_idx, gens in enumerate(model_outputs):
+                for gen in gens:
+                    rows.append({"prompt_idx": prompt_idx, "prompt_id": prompt_ids[prompt_idx], "model_name": model_name, "text": gen})
+        return pd.DataFrame(rows)
 
     def evaluate(self, predictions: List[List[str]], references: List[str], timeout_seconds: float = 5.0) -> Dict[str, Any]:
         """
@@ -437,6 +485,25 @@ class MathEvalEngine:
             wandb.finish()
 
 
+def _load_predictions(pkl_path: Path, dataset: Dataset) -> pd.DataFrame:
+    with open(pkl_path, "rb") as f:
+        data = pickle.load(f)
+    if isinstance(data, pd.DataFrame):
+        return data
+    # Convert old List[List[str]] format — assign all to model_1
+    prompt_ids = list(dataset["id"])
+    rows = []
+    for prompt_idx, gens in enumerate(data):
+        for gen in gens:
+            rows.append({"prompt_idx": prompt_idx, "prompt_id": prompt_ids[prompt_idx], "model_name": "model_1", "text": gen})
+    return pd.DataFrame(rows)
+
+
+def _predictions_to_list(predictions: pd.DataFrame) -> List[List[str]]:
+    """Convert predictions DataFrame to List[List[str]] for evaluate()."""
+    return [group["text"].tolist() for _, group in predictions.groupby("prompt_idx", sort=True)]
+
+
 def main():
     cfg = load_config_with_overrides()
     engine = MathEvalEngine(cfg)
@@ -445,26 +512,18 @@ def main():
     save_dir = Path(__file__).parents[0] / "eval_preds" / save_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    if (save_dir / "eval_predictions.pkl").exists():
+    pkl_path = save_dir / "eval_predictions.pkl"
+    if pkl_path.exists():
         log.info("Loading predictions from file...")
-        with open(save_dir / "eval_predictions.pkl", "rb") as f:
-            predictions = pickle.load(f)
+        predictions = _load_predictions(pkl_path, dataset)
     else:
         log.info("Generating predictions...")
         predictions = engine.run_inference(dataset)
-        with open(save_dir / "eval_predictions.pkl", "wb") as f:
+        with open(pkl_path, "wb") as f:
             pickle.dump(predictions, f)
         log.info("Predictions saved to file.")
-    # if save_dir.exists():
-    #     with open(save_dir / "eval_predictions.pkl", "wb") as f:
-    #         pickle.dump(predictions, f)
-    # else:
-    #     save_dir = Path(__file__).parents[0] / "eval_preds" / cfg.model.path
-    #     save_dir.mkdir(parents=True, exist_ok=True)
-    #     with open(save_dir / "eval_predictions.pkl", "wb") as f:
-    #         pickle.dump(predictions, f)
     log.info("Evaluating predictions...")
-    scores = engine.evaluate(predictions, dataset["answer"])
+    scores = engine.evaluate(_predictions_to_list(predictions), dataset["answer"])
 
     prompt_correctness = {}
     for prompt_id, prompt_scores in zip(dataset["id"], scores["sample_scores"]):
