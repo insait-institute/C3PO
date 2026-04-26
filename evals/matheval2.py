@@ -288,7 +288,7 @@ class MathEvalEngine:
         if "sampling" in self.cfg and self.cfg.sampling is not None:
             dataset_overrides = self.cfg.sampling.get(source_name, {}) or self.cfg.sampling.get("default", {})
             base_params.update(dataset_overrides)
-        base_params["n"] /= self.cfg.model.sample_model_freq
+        base_params["n"] = base_params["n"] // self.cfg.model.sample_model_freq
 
         return SamplingParams(**base_params)
 
