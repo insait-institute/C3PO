@@ -3,7 +3,6 @@ model:
   tp_size: null
   max_model_len: 4096
   enable_thinking: false
-  load_optimizer: false
   sample_model_freq: 1
 data:
   names: "all"
@@ -11,4 +10,3 @@ data:
 wandb:
   enable: true
   project: "math_evals"
-sampling: null

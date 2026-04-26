@@ -19,20 +19,12 @@ import yaml
 from datasets import Dataset, Value, concatenate_datasets, load_dataset
 from formatter import BaseFormatter, get_formatter_mapping
 from huggingface_hub import hf_hub_download
-from ivon import IVON
 from math_verify import parse, verify
-from torch import distributed as dist
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import wandb
 from vllm import LLM, SamplingParams
-
-if not dist.is_initialized():
-    dist.init_process_group(backend="nccl")
-
-rank = dist.get_rank()
-world_size = dist.get_world_size()
 
 
 def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
@@ -41,6 +33,16 @@ def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
     else:
         path = hf_hub_download(repo_id=path_or_repo, filename=filename)
     return torch.load(path, map_location="cpu", mmap=True)
+
+
+def _vllm_worker_load_weights(worker_self, weights):
+    """Invoked on every vLLM worker via collective_rpc.
+
+    vLLM's load_weights handles TP slicing — each worker receives the full weight
+    and takes its own shard. Defined at module scope so cloudpickle can ship it to
+    multiprocess workers.
+    """
+    worker_self.model_runner.model.load_weights(weights)
 
 
 class TimeoutWarningFilter(logging.Filter):
@@ -293,25 +295,34 @@ class MathEvalEngine:
     def run_inference(self, dataset: Dataset) -> pd.DataFrame:
         log.info(f"Starting batch inference for {len(dataset)} prompts...")
 
+        use_ivon = self.cfg.model.sample_model_freq > 1
+        # Leave headroom for per-parameter noise computation when using IVON
+        gpu_mem_util = 0.85 if use_ivon else 0.95
+
         self.llm = LLM(
             model=self.model_name,
-            tensor_parallel_size=world_size,
+            tensor_parallel_size=self.cfg.model.tp_size or torch.cuda.device_count(),
             trust_remote_code=True,
             distributed_executor_backend="external_launcher",
             max_model_len=self.cfg.model.max_model_len,
-            gpu_memory_utilization=0.95,
+            gpu_memory_utilization=gpu_mem_util,
         )
 
-        optimizer = None
-        if self.cfg.model.sample_model_freq > 1:
-            model = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.bfloat16, device_map="cpu")
-            optimizer = IVON(model.parameters(), lr=5, weight_decay=1e-8, ess=1e8, clip_radius=1e-3, hess_init=1e-3)
+        hf_model = None
+        ivon_state = None
+        if use_ivon:
+            # CPU model is the source of param values & iteration order; we only push
+            # noised slices to GPU one parameter at a time, so the full state never
+            # materializes on any single device.
+            hf_model = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.bfloat16, device_map="cpu")
             optim_state_dict = _load_optim_state_dict(self.model_name)
-            optimizer.load_state_dict(optim_state_dict)
-            # for group in optimizer.param_groups:
-            #     for key in ["momentum", "hess"]:
-            #         if key in group:
-            #             group[key] = group[key].to("cuda", dtype=torch.bfloat16)
+            assert len(optim_state_dict["param_groups"]) == 1, "Streaming IVON sampling assumes a single param group"
+            pg = optim_state_dict["param_groups"][0]
+            # hess stays mmap'd on CPU - slices get paged in on demand. momentum is
+            # not needed for inference-only sampling, so we never touch it.
+            ivon_state = {"hess": pg["hess"], "ess": pg["ess"], "wd": pg["weight_decay"]}
+            total_numel = sum(p.numel() for p in hf_model.parameters())
+            assert ivon_state["hess"].numel() == total_numel, f"hess size {ivon_state['hess'].numel()} != model numel {total_numel}"
 
         prompt_ids = list(dataset["id"])
         prompts = list(dataset["prompt"])
@@ -334,16 +345,10 @@ class MathEvalEngine:
         outputs = []
         for i in range(self.cfg.model.sample_model_freq):
             log.info(f"Running sampling pass {i + 1}, Generating {sampling_params_list[0].n} samples...")
-            if optimizer:
-                with optimizer.sampled_params():
-                    llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                    for n, p in model.named_parameters():
-                        llm_model.load_weights([(n, p.data)])
-                    local_outputs = self.llm.generate(prompts, sampling_params_list)
-                    local_outputs = [[res.text for res in output.outputs] for output in local_outputs]
-            else:
-                local_outputs = self.llm.generate(prompts, sampling_params_list)
-                local_outputs = [[res.text for res in output.outputs] for output in local_outputs]
+            if use_ivon:
+                self._stream_ivon_noised_weights(hf_model, ivon_state)
+            local_outputs = self.llm.generate(prompts, sampling_params_list)
+            local_outputs = [[res.text for res in output.outputs] for output in local_outputs]
             outputs.append(local_outputs)
 
         rows = []
@@ -353,6 +358,36 @@ class MathEvalEngine:
                 for gen in gens:
                     rows.append({"prompt_idx": prompt_idx, "prompt_id": prompt_ids[prompt_idx], "model_name": model_name, "text": gen})
         return pd.DataFrame(rows)
+
+    def _stream_ivon_noised_weights(self, hf_model, ivon_state):
+        """Sample IVON noise and push noised weights to vLLM one parameter at a time.
+
+        Bounds peak GPU memory by the largest single parameter rather than the full
+        flat hess/momentum buffers, and avoids ever materializing the IVON state on
+        any one device.
+        """
+        hess_full = ivon_state["hess"]
+        ess = ivon_state["ess"]
+        wd = ivon_state["wd"]
+        device = "cuda"
+
+        offset = 0
+        for n, p in hf_model.named_parameters():
+            p_numel = p.numel()
+            p_hess = hess_full[offset : offset + p_numel].to(device=device, dtype=torch.bfloat16)
+            p_gpu = p.data.to(device=device, dtype=torch.bfloat16)
+            # In-place: p_hess <- 1 / sqrt(ess * (hess + wd))
+            p_hess.add_(wd).mul_(ess).rsqrt_()
+            noise = torch.randn(p_numel, device=device, dtype=torch.bfloat16).mul_(p_hess)
+            p_gpu.view(-1).add_(noise)
+            # Move to CPU so the RPC payload doesn't hold a CUDA tensor across
+            # process boundaries; each worker's load_weights moves it back to its
+            # own GPU and slices for TP.
+            weight_cpu = p_gpu.view(p.shape).to("cpu")
+            self.llm.collective_rpc(_vllm_worker_load_weights, args=([(n, weight_cpu)],))
+            offset += p_numel
+            del p_hess, p_gpu, noise, weight_cpu
+        assert offset == hess_full.numel(), f"offset {offset} != hess size {hess_full.numel()}"
 
     def evaluate(self, predictions: List[List[str]], references: List[str], timeout_seconds: float = 5.0) -> Dict[str, Any]:
         """
@@ -518,7 +553,7 @@ def main():
     dataset = engine.load_and_prepare_data()
     save_name = cfg.model.path.split("/")[-1]
     if cfg.model.sample_model_freq > 1:
-        save_name = f"{save_name}_freq{cfg.model.sample_model_freq}"
+        save_name += f"_freq{cfg.model.sample_model_freq}"
     save_dir = Path(__file__).parents[0] / "eval_preds" / save_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
