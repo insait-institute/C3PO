@@ -22,9 +22,9 @@ from huggingface_hub import hf_hub_download
 from math_verify import parse, verify
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from vllm import LLM, SamplingParams
 
 import wandb
-from vllm import LLM, SamplingParams
 
 
 def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
@@ -138,37 +138,21 @@ def _evaluate_single(args):
     sample_scores = []
     parsed_preds = []
 
-    debug_dir = Path(__file__).parents[0] / "eval_debug_logs"
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    pid = os.getpid()
-
-    def _debug(msg):
-        with open(debug_dir / f"eval_debug_{pid}.log", "a") as f:
-            f.write(msg + "\n")
-
-    _debug(f"Starting new prompt: {len(preds)} preds")
-
-    # Configure signal handler for timeout
     signal.signal(signal.SIGALRM, _timeout_handler)
 
     try:
         if ref is not None:
-            _debug("Parsing ref...")
-            # Allow up to 10s for reference parsing
             signal.setitimer(signal.ITIMER_REAL, 10.0)
             ref_parsed = parse(ref, parsing_timeout=10)
             signal.setitimer(signal.ITIMER_REAL, 0)
-            _debug("Ref parsed.")
         else:
             ref_parsed = None
     except (Exception, TimeoutException):
         signal.setitimer(signal.ITIMER_REAL, 0)
         ref_parsed = None
-        _debug("Ref parsing failed.")
 
     for i, p in enumerate(preds):
         if i % 100 == 0:
-            _debug(f"Progress: {i}/{len(preds)}")
             try:
                 from sympy.core.cache import clear_cache
 
@@ -176,13 +160,9 @@ def _evaluate_single(args):
             except Exception:
                 pass
         try:
-            _debug(f"[{i}] Parsing...")
-            # 10s maximum for parsing
             signal.setitimer(signal.ITIMER_REAL, 10.0)
             p_parsed = parse(p, parsing_timeout=10)[0]
 
-            _debug(f"[{i}] Verifying...")
-            # Use provided timeout for verification
             signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
             is_correct = verify(ref_parsed, p_parsed, timeout_seconds=None)
 
@@ -190,14 +170,10 @@ def _evaluate_single(args):
 
             parsed_preds.append(p_parsed)
             sample_scores.append(is_correct)
-            _debug(f"[{i}] Done.")
-        except (Exception, TimeoutException) as e:
+        except (Exception, TimeoutException):
             signal.setitimer(signal.ITIMER_REAL, 0)
             parsed_preds.append(None)
             sample_scores.append(False)
-            _debug(f"[{i}] Exception: {type(e).__name__} - {str(e)}")
-
-    valid_parsed = [p for p in parsed_preds if p is not None]
 
     try:
         from sympy.core.cache import clear_cache
@@ -206,40 +182,37 @@ def _evaluate_single(args):
     except Exception:
         pass
 
+    str_preds = []
+    for p in parsed_preds:
+        if p is None:
+            str_preds.append(None)
+            continue
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 5.0)
+            s = str(p)
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        except Exception:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            s = "error"
+        str_preds.append(s)
+
     try:
-        if valid_parsed:
-            _debug("Starting majority vote string formatting...")
-            # We wrap this in try-except because sympy's str() and evalf() can occasionally
-            # raise exceptions like ZeroDivisionError on mathematically malformed inputs.
-            str_preds = []
-            for j, p in enumerate(valid_parsed):
-                if j % 500 == 0:
-                    _debug(f"str formatting: {j}/{len(valid_parsed)}")
-                try:
-                    signal.setitimer(signal.ITIMER_REAL, 5.0)
-                    s = str(p)
-                    signal.setitimer(signal.ITIMER_REAL, 0)
-                except Exception:
-                    signal.setitimer(signal.ITIMER_REAL, 0)
-                    s = "error"
-                str_preds.append(s)
-
-            _debug("Running Counter...")
-            counts = Counter(str_preds)
+        valid_strs = [s if s is not None else "<WRONG>" for s in str_preds]
+        if valid_strs:
+            counts = Counter(valid_strs)
             majority_answer_str = counts.most_common(1)[0][0]
-
-            _debug("Finding orig idx...")
-            representative_idx = str_preds.index(majority_answer_str)
-            orig_idx = [i for i, x in enumerate(parsed_preds) if x is not None][representative_idx]
-            majority_score = sample_scores[orig_idx]
-            _debug("Majority finished.")
+            majority_score = False
+            for i, s in enumerate(str_preds):
+                if s == majority_answer_str:
+                    majority_score = sample_scores[i]
+                    break
         else:
             majority_score = False
     except Exception:
         signal.setitimer(signal.ITIMER_REAL, 0)
         majority_score = False
 
-    return sample_scores, majority_score
+    return sample_scores, majority_score, str_preds
 
 
 class MathEvalEngine:
@@ -396,6 +369,7 @@ class MathEvalEngine:
         log.info("Scoring model responses in parallel...")
         all_sample_scores = []
         majority_scores = []
+        all_parsed_strs = []
 
         args_iter = ((preds, ref, timeout_seconds) for preds, ref in zip(predictions, references))
 
@@ -403,22 +377,99 @@ class MathEvalEngine:
             # We use pool.imap to keep order and stream results for tqdm
             results = list(tqdm(pool.imap(_evaluate_single, args_iter), total=len(references), desc="Scoring..."))
 
-        for sample_scores, majority_score in results:
+        for sample_scores, majority_score, parsed_strs in results:
             all_sample_scores.append(sample_scores)
             majority_scores.append(majority_score)
+            all_parsed_strs.append(parsed_strs)
 
-        return {"sample_scores": all_sample_scores, "majority_scores": majority_scores}
+        return {"sample_scores": all_sample_scores, "majority_scores": majority_scores, "parsed_strs": all_parsed_strs}
 
-    def report_metrics(self, dataset: Dataset, eval_results: Dict[str, Any]):
+    @staticmethod
+    def _precompute_maj_at_n(
+        scores: List[List[bool]],
+        parsed_strs: List[List[str]],
+        model_names_per_prompt: List[List[str]],
+        maj_scores: List[bool],
+        num_trials: int,
+    ) -> List[Dict[int, float]]:
+        """For each prompt, compute maj@n at every n in {1, 2, 4, ..., total_samples}.
+
+        Sampling rule (per trial) when sample_model_freq = M:
+          - n < M: pick n indices uniformly at random across all samples.
+          - n >= M: split n as evenly as possible across the M models (the first n%M
+            models get one extra), drawing without replacement within each model.
+        n == total_samples is computed deterministically against `maj_scores`.
+        """
+        per_prompt_maj: List[Dict[int, float]] = []
+        for p_idx, (s_p, str_p, models_p) in enumerate(zip(scores, parsed_strs, model_names_per_prompt)):
+            total = len(s_p)
+            prompt_result: Dict[int, float] = {}
+            if total == 0:
+                per_prompt_maj.append(prompt_result)
+                continue
+
+            ns_pow2 = sorted({1, *(2**j for j in range(int(math.log2(total)) + 1))})
+
+            idx_by_model: Dict[str, List[int]] = {}
+            for i, m in enumerate(models_p):
+                idx_by_model.setdefault(m, []).append(i)
+            model_keys = list(idx_by_model.keys())
+            M = len(model_keys)
+
+            for n in ns_pow2:
+                if n > total:
+                    continue
+                if n == total:
+                    prompt_result[n] = 1.0 if bool(maj_scores[p_idx]) else 0.0
+                    continue
+
+                rng = np.random.default_rng((p_idx * 1000003 + n * 31) & 0xFFFFFFFF)
+                correct = 0
+                for _ in range(num_trials):
+                    if n < M:
+                        sampled = rng.choice(total, size=n, replace=False).tolist()
+                    else:
+                        per_model = n // M
+                        remainder = n % M
+                        sampled = []
+                        for k_idx, mname in enumerate(model_keys):
+                            take = per_model + (1 if k_idx < remainder else 0)
+                            sampled.extend(rng.choice(idx_by_model[mname], size=take, replace=False).tolist())
+
+                    valid = [(str_p[i], s_p[i]) for i in sampled if str_p[i] is not None]
+                    if not valid:
+                        continue
+                    counts = Counter(s for s, _ in valid)
+                    majority_answer = counts.most_common(1)[0][0]
+                    for s, c in valid:
+                        if s == majority_answer:
+                            if c:
+                                correct += 1
+                            break
+                prompt_result[n] = correct / num_trials
+
+            per_prompt_maj.append(prompt_result)
+        return per_prompt_maj
+
+    def report_metrics(self, dataset: Dataset, eval_results: Dict[str, Any], predictions: pd.DataFrame, num_maj_trials: int = 100):
         """
         Calculates metrics for multi-sample evaluations:
         - Avg/Pass@1: Average correctness across all individual samples.
         - Best-of-i (for i=1 to n): Probability that at least one of i random samples is correct.
         - Majority Vote: Correct if the most frequent parsed answer is correct.
+        - Maj@i (for i in powers of 2): Bootstrap-estimated self-consistency at sample size i.
+          When sample_model_freq > 1, samples for i >= M are equally split across the M models;
+          for i < M, i samples are drawn uniformly at random across all models.
         """
         sources = np.array(dataset["data_source"])
         scores = eval_results["sample_scores"]
         maj_scores = eval_results["majority_scores"]
+        parsed_strs = eval_results["parsed_strs"]
+
+        predictions_sorted = predictions.sort_values("prompt_idx", kind="stable")
+        model_names_per_prompt = [g["model_name"].tolist() for _, g in predictions_sorted.groupby("prompt_idx", sort=True)]
+
+        per_prompt_maj = self._precompute_maj_at_n(scores, parsed_strs, model_names_per_prompt, maj_scores, num_maj_trials)
 
         def get_metrics_for_subset(indices):
             subset_scores = [scores[i] for i in indices]
@@ -464,10 +515,19 @@ class MathEvalEngine:
                 if bon_i_probs:
                     bon_metrics[f"bon_{i}"] = np.mean(bon_i_probs)
 
+            # 4. Maj@i for i in powers of 2 up to max_n
+            maj_at_n_metrics = {}
+            ns_pow2 = sorted({1, *(2**j for j in range(int(math.log2(max_n)) + 1))}) if max_n >= 1 else []
+            for n in ns_pow2:
+                vals = [per_prompt_maj[i][n] for i in indices if n in per_prompt_maj[i]]
+                if vals:
+                    maj_at_n_metrics[f"maj_{n}"] = float(np.mean(vals))
+
             res = {
                 "avg": avg_acc,
                 "maj": maj_acc,
                 "bon": bon_metrics,
+                "maj_at_n": maj_at_n_metrics,
                 "stderr": np.std([np.mean(s) for s in subset_scores if len(s) > 0]) / np.sqrt(len(subset_scores)),
             }
             return res
@@ -480,8 +540,11 @@ class MathEvalEngine:
             powers_of_two = [2**j for j in range(int(math.log2(max_n_global)) + 1)]
             relevant_global_bon = [f"{k}: {v:.2%}" for k, v in global_metrics["bon"].items() if int(k.split("_")[1]) in powers_of_two or int(k.split("_")[1]) == 1]
             global_bon_str = " | ".join(relevant_global_bon)
+        global_maj_n_str = " | ".join(f"{k}: {v:.2%}" for k, v in global_metrics.get("maj_at_n", {}).items())
 
         log.info(f"average        | Avg: {global_metrics['avg']:.2%} | Maj: {global_metrics['maj']:.2%} | {global_bon_str}")
+        if global_maj_n_str:
+            log.info(f"average        | {global_maj_n_str}")
 
         logs = {
             "agg/avg_acc": global_metrics["avg"],
@@ -492,6 +555,8 @@ class MathEvalEngine:
         for k, v in global_metrics.get("bon", {}).items():
             if int(k.split("_")[1]) in powers_of_two:
                 logs[f"agg/{k}"] = v
+        for k, v in global_metrics.get("maj_at_n", {}).items():
+            logs[f"agg/{k}"] = v
 
         # Per-dataset breakdown
         for source in np.unique(sources):
@@ -506,6 +571,8 @@ class MathEvalEngine:
             for k, v in m.get("bon", {}).items():
                 if int(k.split("_")[1]) in powers_of_two:
                     source_logs[f"acc_{source}/{k}"] = v
+            for k, v in m.get("maj_at_n", {}).items():
+                source_logs[f"acc_{source}/{k}"] = v
 
             logs.update(source_logs)
 
@@ -514,8 +581,11 @@ class MathEvalEngine:
             powers_of_two = [2**j for j in range(int(math.log2(max_n_subset)) + 1)]
             relevant_bon = [f"{k}: {v:.2%}" for k, v in m.get("bon", {}).items() if int(k.split("_")[1]) in powers_of_two or int(k.split("_")[1]) == 1]
             bon_str = " | ".join(relevant_bon)
+            maj_n_str = " | ".join(f"{k}: {v:.2%}" for k, v in m.get("maj_at_n", {}).items())
 
             log.info(f"{source:15} | Avg: {m['avg']:.2%} | Maj: {m['maj']:.2%} | {bon_str}")
+            if maj_n_str:
+                log.info(f"{source:15} | {maj_n_str}")
 
         if self.cfg.wandb.enable:
             save_name = self.cfg.model.path
@@ -523,6 +593,8 @@ class MathEvalEngine:
                 save_name = save_name.split("/")[-1]
             else:
                 save_name = "--".join(self.cfg.model.path.split("/")[-3:-1])
+            if self.cfg.model.sample_model_freq > 1:
+                save_name += f"_freq{self.cfg.model.sample_model_freq}"
             wandb.init(project=self.cfg.wandb.project, name=save_name, config=dict(self.cfg))
             wandb.log(logs)
             wandb.finish()
@@ -570,14 +642,14 @@ def main():
     log.info("Evaluating predictions...")
     scores = engine.evaluate(_predictions_to_list(predictions), dataset["answer"])
 
-    prompt_correctness = {}
-    for prompt_id, prompt_scores in zip(dataset["id"], scores["sample_scores"]):
-        prompt_correctness[prompt_id] = prompt_scores
+    correctness_df = predictions.sort_values("prompt_idx", kind="stable").reset_index(drop=True).drop(columns=["text"])
+    flat_scores = [bool(s) for prompt_scores in scores["sample_scores"] for s in prompt_scores]
+    correctness_df["correct"] = flat_scores
 
-    with open(save_dir / "eval_correctness.pkl", "wb") as f:
-        pickle.dump(prompt_correctness, f)
+    with open(save_dir / "eval_correctness_df.pkl", "wb") as f:
+        pickle.dump(correctness_df, f)
 
-    engine.report_metrics(dataset, scores)
+    engine.report_metrics(dataset, scores, predictions)
 
 
 if __name__ == "__main__":

@@ -22,47 +22,43 @@ from __future__ import annotations
 import math
 import pickle
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import pandas as pd
 
 # --- Configuration -----------------------------------------------------------
 
 ROOT = Path(__file__).parents[0] / "eval_preds"
-BASE_DIR = ROOT / "olmo3_nmtron_ivon"           # base model
+BASE_DIR = ROOT / "olmo3_nmtron_ivon"  # base model
 TRAINED_DIRS = [x for x in ROOT.glob("olmo3_nmtron_*")]
 print(f"Found {len(TRAINED_DIRS)} directories")
-CONFIDENCE = 0.05   # zeta; 95% confidence bound from paper Appx. C.4
-K_EXPECTED = 4096   # samples per prompt
+CONFIDENCE = 0.05  # zeta; 95% confidence bound from paper Appx. C.4
+K_EXPECTED = 4096  # samples per prompt
 
 # --- Loading -----------------------------------------------------------------
 
-def load_correctness(model_dir: Path) -> Dict[object, List[bool]]:
-    """Load eval_correctness.pkl -> {prompt_id: [bool, ...]}."""
+
+def load_correctness(model_dir: Path) -> pd.DataFrame:
+    """Load eval_correctness.pkl -> long-format DataFrame with prompt_id, model_name, correct."""
     path = model_dir / "eval_correctness.pkl"
     if not path.exists():
         raise FileNotFoundError(f"Missing {path}")
     with open(path, "rb") as f:
         data = pickle.load(f)
-    if not isinstance(data, dict):
-        raise TypeError(
-            f"Expected dict in {path}, got {type(data).__name__}"
-        )
+    if not isinstance(data, pd.DataFrame):
+        raise TypeError(f"Expected DataFrame in {path}, got {type(data).__name__}")
     return data
 
 
-def correct_counts(correctness: Dict[object, List[bool]]) -> Dict[object, Tuple[int, int]]:
-    """Return {prompt_id: (num_correct, num_samples)}."""
-    out = {}
-    for pid, flags in correctness.items():
-        # Be liberal: accept anything truthy as correct.
-        flags_list = list(flags)
-        n = len(flags_list)
-        c = sum(1 for v in flags_list if bool(v))
-        out[pid] = (c, n)
-    return out
+def correct_counts(correctness: pd.DataFrame) -> Dict[object, Tuple[int, int]]:
+    """Return {prompt_id: (num_correct, num_samples)}, summed across all model_names."""
+    flags = correctness["correct"].astype(bool)
+    grouped = correctness.assign(_correct=flags).groupby("prompt_id")["_correct"].agg(["sum", "count"])
+    return {pid: (int(row["sum"]), int(row["count"])) for pid, row in grouped.iterrows()}
+
 
 # --- Metrics -----------------------------------------------------------------
+
 
 def epsilon_from_k(k: int, zeta: float = CONFIDENCE) -> float:
     """Paper Appx. C.4: eps = -log(zeta)/k."""
@@ -91,10 +87,7 @@ def classify_prompts(
     missing_base = set(trained_counts) - set(base_counts)
     missing_trained = set(base_counts) - set(trained_counts)
     if missing_base or missing_trained:
-        print(
-            f"  note: {len(missing_base)} prompt(s) only in trained, "
-            f"{len(missing_trained)} only in base; using {len(common)} common."
-        )
+        print(f"  note: {len(missing_base)} prompt(s) only in trained, {len(missing_trained)} only in base; using {len(common)} common.")
 
     rows = []
     for pid in common:
@@ -112,57 +105,65 @@ def classify_prompts(
             cat = "E"
         else:
             cat = "O"
-        rows.append({
-            "prompt_id": pid,
-            "base_correct": c_b,
-            "base_k": k_b,
-            "base_frac": c_b / k_b if k_b else 0.0,
-            "trained_correct": c_t,
-            "trained_k": k_t,
-            "trained_frac": c_t / k_t if k_t else 0.0,
-            "category": cat,
-        })
+        rows.append(
+            {
+                "prompt_id": pid,
+                "base_correct": c_b,
+                "base_k": k_b,
+                "base_frac": c_b / k_b if k_b else 0.0,
+                "trained_correct": c_t,
+                "trained_k": k_t,
+                "trained_frac": c_t / k_t if k_t else 0.0,
+                "category": cat,
+            }
+        )
 
     df = pd.DataFrame(rows)
     # Report the base-k-derived eps as the headline threshold.
     # (In this study all models share k=4096, so eps_b == eps_t.)
-    eps_headline = (
-        epsilon_from_k(df["base_k"].iloc[0]) if len(df) else float("nan")
-    )
+    eps_headline = epsilon_from_k(df["base_k"].iloc[0]) if len(df) else float("nan")
     return df, eps_headline
 
 
 def support_metrics(df: pd.DataFrame) -> Dict[str, float]:
     """Compute SRR, NDR, SDS, NSCR + raw counts from a per-prompt DataFrame."""
     counts = df["category"].value_counts().to_dict()
-    P = counts.get("P", 0)
-    E = counts.get("E", 0)
-    S = counts.get("S", 0)
-    O = counts.get("O", 0)
+    var_P = counts.get("P", 0)
+    var_E = counts.get("E", 0)
+    var_S = counts.get("S", 0)
+    var_O = counts.get("O", 0)
 
-    srr = P / (P + S) if (P + S) > 0 else float("nan")
-    ndr = E / (P + E) if (P + E) > 0 else float("nan")
+    srr = var_P / (var_P + var_S) if (var_P + var_S) > 0 else float("nan")
+    ndr = var_E / (var_P + var_E) if (var_P + var_E) > 0 else float("nan")
     if srr != srr or ndr != ndr or (srr + ndr) == 0:  # nan or zero denom
         sds = float("nan") if (srr != srr or ndr != ndr) else 0.0
     else:
         sds = 2 * srr * ndr / (srr + ndr)
-    nscr = (E - S) / (P + E + S) if (P + E + S) > 0 else float("nan")
+    nscr = (var_E - var_S) / (var_P + var_E + var_S) if (var_P + var_E + var_S) > 0 else float("nan")
 
     return {
-        "P": P, "E": E, "S": S, "O": O,
-        "SRR": srr, "NDR": ndr, "SDS": sds, "NSCR": nscr,
-        "base_pass_any": (P + S) / max(P + E + S + O, 1),
-        "trained_pass_any": (P + E) / max(P + E + S + O, 1),
+        "P": var_P,
+        "E": var_E,
+        "S": var_S,
+        "O": var_O,
+        "SRR": srr,
+        "NDR": ndr,
+        "SDS": sds,
+        "NSCR": nscr,
+        "base_pass_any": (var_P + var_S) / max(var_P + var_E + var_S + var_O, 1),
+        "trained_pass_any": (var_P + var_E) / max(var_P + var_E + var_S + var_O, 1),
     }
 
+
 # --- Reporting ---------------------------------------------------------------
+
 
 def fmt_metrics(name: str, m: Dict[str, float], eps: float) -> str:
     return (
         f"\n=== {name} ===\n"
         f"  epsilon (paper formula, zeta=0.05) = {eps:.6e}\n"
         f"  Counts:   P={m['P']}  E={m['E']}  S={m['S']}  O={m['O']}  "
-        f"(total={m['P']+m['E']+m['S']+m['O']})\n"
+        f"(total={m['P'] + m['E'] + m['S'] + m['O']})\n"
         f"  SRR  = {m['SRR']:.4f}   (Support Retention)\n"
         f"  NDR  = {m['NDR']:.4f}   (Net Discovery)\n"
         f"  SDS  = {m['SDS']:.4f}   (Balanced Harmonic)\n"
@@ -171,7 +172,9 @@ def fmt_metrics(name: str, m: Dict[str, float], eps: float) -> str:
         f"  Trained in-support fraction: {m['trained_pass_any']:.3f}\n"
     )
 
+
 # --- Main --------------------------------------------------------------------
+
 
 def main():
     print(f"Base model: {BASE_DIR}")
@@ -182,10 +185,7 @@ def main():
     ks = {k for (_, k) in base_counts.values()}
     print(f"  {len(base_counts)} prompts, sample counts seen: {sorted(ks)}")
     if K_EXPECTED not in ks:
-        print(
-            f"  WARNING: expected k={K_EXPECTED} but saw {sorted(ks)}. "
-            f"Proceeding with actual k per prompt."
-        )
+        print(f"  WARNING: expected k={K_EXPECTED} but saw {sorted(ks)}. Proceeding with actual k per prompt.")
 
     per_prompt_frames = []
     summary_rows = []
@@ -209,15 +209,22 @@ def main():
         df_out.insert(0, "trained_model", tdir.name)
         per_prompt_frames.append(df_out)
 
-        summary_rows.append({
-            "trained_model": tdir.name,
-            "P": m["P"], "E": m["E"], "S": m["S"], "O": m["O"],
-            "SRR": m["SRR"], "NDR": m["NDR"],
-            "SDS": m["SDS"], "NSCR": m["NSCR"],
-            "base_pass_any": m["base_pass_any"],
-            "trained_pass_any": m["trained_pass_any"],
-            "epsilon": eps,
-        })
+        summary_rows.append(
+            {
+                "trained_model": tdir.name,
+                "P": m["P"],
+                "E": m["E"],
+                "S": m["S"],
+                "O": m["O"],
+                "SRR": m["SRR"],
+                "NDR": m["NDR"],
+                "SDS": m["SDS"],
+                "NSCR": m["NSCR"],
+                "base_pass_any": m["base_pass_any"],
+                "trained_pass_any": m["trained_pass_any"],
+                "epsilon": eps,
+            }
+        )
 
     # Persist results
     outdir = Path(__file__).parents[0]
