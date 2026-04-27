@@ -15,6 +15,7 @@ import constants
 import numpy as np
 import pandas as pd
 import torch
+import wandb
 import yaml
 from datasets import Dataset, Value, concatenate_datasets, load_dataset
 from formatter import BaseFormatter, get_formatter_mapping
@@ -23,8 +24,6 @@ from math_verify import parse, verify
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
-
-import wandb
 
 
 def _load_optim_state_dict(path_or_repo, filename="optimizer.pt"):
@@ -646,7 +645,7 @@ def main():
     flat_scores = [bool(s) for prompt_scores in scores["sample_scores"] for s in prompt_scores]
     correctness_df["correct"] = flat_scores
 
-    with open(save_dir / "eval_correctness_df.pkl", "wb") as f:
+    with open(save_dir / "eval_correctness.pkl", "wb") as f:
         pickle.dump(correctness_df, f)
 
     engine.report_metrics(dataset, scores, predictions)
