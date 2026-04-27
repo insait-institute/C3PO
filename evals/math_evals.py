@@ -590,7 +590,7 @@ class MathEvalEngine:
             save_name = self.cfg.model.path
             if save_name.count("/") == 1:
                 save_name = save_name.split("/")[-1]
-            else:
+            elif save_name.count("/") > 1:
                 save_name = "--".join(self.cfg.model.path.split("/")[-3:-1])
             if self.cfg.model.sample_model_freq > 1:
                 save_name += f"_freq{self.cfg.model.sample_model_freq}"
