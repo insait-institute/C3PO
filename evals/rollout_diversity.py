@@ -144,7 +144,11 @@ def main(args):
 
     results = []
     for f in files:
-        df = pd.read_json(f, lines=True)
+        try:
+            df = pd.read_json(f, lines=True)
+        except Exception:
+            print(f"Error: could not read {f}, skipping")
+            continue
         step = int(df["step"].iloc[0])
         if existing is not None and not args.overwrite and ((existing["model"] == args.model) & (existing["step"] == step)).any():
             print(f"step {step:>5d}  [skip — already in {out_path.name}]")
