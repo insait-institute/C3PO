@@ -205,8 +205,11 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         raise AttributeError(f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'.Available optimizers: {dir(module)}") from e
 
     optimizer = optimizer_cls(parameters, **optimizer_args)
-    if optimizer_args.get("optimizer_load_path") and "ivon" in optimizer_name_lower:
-        optimizer = _load_ivon_checkpoint(optimizer, optimizer_args.get("optimizer_load_path"))
+    print(f"Before loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}")
+    print(f"Before loading IVON: Hess momentum={optimizer.param_groups[0]['momentum'].sum()}, Hess min={optimizer.param_groups[0]['momentum'].min()}")
+    if config.optimizer_load_path and "ivon" in optimizer_name_lower:
+        print(f'Loading optimizer from ')
+        optimizer = _load_ivon_checkpoint(optimizer, config.optimizer_load_path)
     if "ivon" in optimizer_name_lower:
         for group in optimizer.param_groups:
             group["initial_lr"] = config.lr
@@ -216,7 +219,8 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
             group["beta2"] = config.betas[1]
             group["ess"] = config.ivon_config.ess
             group["clip_radius"] = config.ivon_config.clip_radius
-
+    print(f"After loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}")
+    print(f"After loading IVON: Hess momentum={optimizer.param_groups[0]['momentum'].sum()}, Hess min={optimizer.param_groups[0]['momentum'].min()}")
     return optimizer
 
 

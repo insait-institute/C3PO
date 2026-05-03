@@ -160,7 +160,7 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
         actor_rollout_ref.actor.optim.ivon_config.mc_samples=$MC_SAMPLES
     "
-    if [ "$IVON_INIT_METHOD" == "trained" ]; then
+    if [ "$IVON_INIT_METHOD" == "realtrained" ]; then
         OPT_ARGS="${OPT_ARGS} \
             +actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH
         "
@@ -204,6 +204,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     data.max_prompt_length=1024 \
     data.max_response_length=3072 \
     data.train_batch_size=32 \
+    data.filter_overlong_prompts=true \
     data.shuffle=True \
     actor_rollout_ref.model.path=$MODEL_PATH \
     actor_rollout_ref.model.tokenizer_path=$TOKENIZER_PATH \
