@@ -206,7 +206,7 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
 
     optimizer = optimizer_cls(parameters, **optimizer_args)
     print(f"Before loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}")
-    print(f"Before loading IVON: Hess momentum={optimizer.param_groups[0]['momentum'].sum()}, Hess min={optimizer.param_groups[0]['momentum'].min()}")
+    print(f"Before loading IVON: Momentum sum={optimizer.param_groups[0]['momentum'].sum()}, Momentum min={optimizer.param_groups[0]['momentum'].min()}")
     if config.optimizer_load_path and "ivon" in optimizer_name_lower:
         print(f"Loading optimizer from {config.optimizer_load_path}")
         optimizer = _load_ivon_checkpoint(optimizer, config.optimizer_load_path)
@@ -220,7 +220,7 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
             group["ess"] = config.ivon_config.ess
             group["clip_radius"] = config.ivon_config.clip_radius
     print(f"After loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}")
-    print(f"After loading IVON: Hess momentum={optimizer.param_groups[0]['momentum'].sum()}, Hess min={optimizer.param_groups[0]['momentum'].min()}")
+    print(f"After loading IVON: Momentum sum={optimizer.param_groups[0]['momentum'].sum()}, Momentum min={optimizer.param_groups[0]['momentum'].min()}")
     return optimizer
 
 
