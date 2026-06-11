@@ -1304,21 +1304,21 @@ class RayPPOTrainer:
         prev_step_profile = False
         curr_step_profile = self.global_steps in self.config.global_profiler.steps if self.config.global_profiler.steps is not None else False
         next_step_profile = False
-        m3po_mc_samples = 1
-        cm3po_mc_samples = 1
+        m3po_m = 1
+        decoupled_mc_samples = 1
 
         if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
-            m3po_mc_samples = self.config.actor_rollout_ref.actor.optim.ivon_config.m3po_mc_samples
-            cm3po_mc_samples = self.config.actor_rollout_ref.actor.optim.ivon_config.cm3po_mc_samples
-        if m3po_mc_samples > 1 and cm3po_mc_samples > 1:
-            raise ValueError("Cannot use M3PO and CM3PO together. Set either m3po_mc_samples or cm3po_mc_samples to 1.")
+            m3po_m = self.config.actor_rollout_ref.actor.optim.ivon_config.m3po_m
+            decoupled_mc_samples = self.config.actor_rollout_ref.actor.optim.ivon_config.decoupled_mc_samples
+        if m3po_m > 1 and decoupled_mc_samples > 1:
+            raise ValueError("Cannot use M3PO and the decoupled variant together. Set either m3po_m or decoupled_mc_samples to 1.")
 
-        is_mc_sample_ivon = m3po_mc_samples > 1 or cm3po_mc_samples > 1
+        is_mc_sample_ivon = m3po_m > 1 or decoupled_mc_samples > 1
 
         for epoch in range(current_epoch, self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
-                for mc_sample_idx in range(m3po_mc_samples):
-                    is_last_m3po_sample = mc_sample_idx == m3po_mc_samples - 1
+                for mc_sample_idx in range(m3po_m):
+                    is_last_m3po_sample = mc_sample_idx == m3po_m - 1
                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
                         self.actor_rollout_wg.async_calls_finalize_fn_exec(blocking=False)
                     metrics = {}
@@ -1338,14 +1338,14 @@ class RayPPOTrainer:
                     # pass global_steps to trace
                     gen_batch.meta_info["global_steps"] = self.global_steps
                     n_total = self.config.actor_rollout_ref.rollout.n
-                    M = self.config.actor_rollout_ref.rollout.M
-                    n_per_iter = n_total // M
+                    c3po_n = self.config.actor_rollout_ref.rollout.c3po_n
+                    n_per_iter = n_total // c3po_n
                     gen_batch_output = gen_batch.repeat(repeat_times=n_per_iter, interleave=True)
                     is_last_step = self.global_steps >= self.total_training_steps
                     with marked_timer("step", timing_raw):
                         gen_buffer = []
                         with marked_timer("gen", timing_raw, color="red"):
-                            for rollout_num in range(M):
+                            for rollout_num in range(c3po_n):
                                 # If IVON, add the noise to the actor parameters and sync weights
                                 if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon":
                                     with marked_timer("noise_actor", timing_raw, color="red"):
@@ -1367,7 +1367,7 @@ class RayPPOTrainer:
 
                                 # If IVON, denoise the actor parameters and sync weights
                                 if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and (
-                                    self.config.actor_rollout_ref.actor.optim.ivon_config.use_ivon_rollout_only or M > 1
+                                    self.config.actor_rollout_ref.actor.optim.ivon_config.use_ivon_rollout_only or c3po_n > 1
                                 ):
                                     with marked_timer("denoise_actor", timing_raw, color="red"):
                                         self.actor_rollout_wg.denoise_actor()
@@ -1378,10 +1378,10 @@ class RayPPOTrainer:
                                     timing_raw.update(m_output.meta_info["timing"])
                                     m_output.meta_info.pop("timing", None)
 
-                            # Concatenate the M rollout batches into a single DataProto.
+                            # Concatenate the c3po_n rollout batches into a single DataProto.
                             # Each batch has shape [num_prompts * n_per_iter] with interleaved
                             # ordering: [p0*n_per_iter, p1*n_per_iter, ...].
-                            # After concat of M such batches we get:
+                            # After concat of c3po_n such batches we get:
                             #   [p0*n_per_iter, p1*n_per_iter, ..., pK*n_per_iter,  <- iter 0
                             #    p0*n_per_iter, p1*n_per_iter, ..., pK*n_per_iter,  <- iter 1
                             #    ...]
@@ -1390,16 +1390,16 @@ class RayPPOTrainer:
                             # So we reorder to group all n responses per prompt together.
                             gen_buffer_concat = DataProto.concat(gen_buffer)
 
-                            if M > 1:
+                            if c3po_n > 1:
                                 num_prompts = len(gen_batch)
                                 # Build reorder indices: for each prompt, gather its n_per_iter
-                                # responses from each of the M iterations.
+                                # responses from each of the c3po_n iterations.
                                 reorder_indices = []
                                 for p in range(num_prompts):
-                                    for m in range(M):
-                                        # In iteration m, prompt p's responses are at positions:
-                                        # m * (num_prompts * n_per_iter) + p * n_per_iter ... + n_per_iter - 1
-                                        start = m * (num_prompts * n_per_iter) + p * n_per_iter
+                                    for c in range(c3po_n):
+                                        # In iteration c, prompt p's responses are at positions:
+                                        # c * (num_prompts * n_per_iter) + p * n_per_iter ... + n_per_iter - 1
+                                        start = c * (num_prompts * n_per_iter) + p * n_per_iter
                                         reorder_indices.extend(range(start, start + n_per_iter))
                                 reorder_indices = torch.tensor(reorder_indices, dtype=torch.long)
                                 gen_buffer_concat.reorder(reorder_indices)
@@ -1443,9 +1443,9 @@ class RayPPOTrainer:
                         batch = batch.union(gen_buffer_concat)
 
                         # now noise the actor again. This noise will be propagated to both pi_rollout and pi_theta
-                        for cm3po_iter in range(cm3po_mc_samples):
-                            is_last_cm3po_sample = cm3po_iter == cm3po_mc_samples - 1
-                            if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and (M > 1 or cm3po_mc_samples > 1):
+                        for decoupled_iter in range(decoupled_mc_samples):
+                            is_last_decoupled_sample = decoupled_iter == decoupled_mc_samples - 1
+                            if self.config.actor_rollout_ref.actor.optim.optimizer.lower() == "ivon" and (c3po_n > 1 or decoupled_mc_samples > 1):
                                 # This noising is undone in dp_actor.py after the loss is computed
                                 with marked_timer("noise_actor", timing_raw, color="red"):
                                     self.actor_rollout_wg.noise_actor()
@@ -1601,7 +1601,7 @@ class RayPPOTrainer:
                             if self.config.trainer.critic_warmup <= self.global_steps:
                                 # update actor
                                 with marked_timer("update_actor", timing_raw, color="red"):
-                                    actor_output = self._update_actor(batch, should_take_step=(is_last_m3po_sample and is_last_cm3po_sample), is_mc_sample_ivon=is_mc_sample_ivon)
+                                    actor_output = self._update_actor(batch, should_take_step=(is_last_m3po_sample and is_last_decoupled_sample), is_mc_sample_ivon=is_mc_sample_ivon)
 
                         # Check if the ESI (Elastic Server Instance)/training plan is close to expiration.
                         esi_close_to_expiration = should_save_ckpt_esi(

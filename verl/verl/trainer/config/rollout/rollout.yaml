@@ -107,8 +107,9 @@ do_sample: True
 # number of responses (i.e. num sample times). > 1 for grpo
 n: 1
 
-# number of rollouts per batch. Used only by IVON, to add more diversity to each batch
-M: 1
+# C3PO: number of independent weight perturbations to split each rollout group across
+# (the paper's N). Used only by IVON; >1 enables chunked noising with Seq-MIS correction.
+c3po_n: 1
 
 # The over_sample_rate parameter controls the early termination threshold for training rollouts,
 # where the system will abort remaining requests when (1 - over_sample_rate) * total_requests completions are reached.

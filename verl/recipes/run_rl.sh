@@ -79,11 +79,11 @@ PPO_KL_COEF=${PPO_KL_COEF:--1}
 CLIP_COV_RATIO=${CLIP_COV_RATIO:--1}
 CLIP_COV_LB=${CLIP_COV_LB:--1}
 CLIP_COV_UB=${CLIP_COV_UB:--1}
-M3PO_MC_SAMPLES=${M3PO_MC_SAMPLES:-1}
-CM3PO_MC_SAMPLES=${CM3PO_MC_SAMPLES:-1}
+M3PO_M=${M3PO_M:-1}
+DECOUPLED_MC_SAMPLES=${DECOUPLED_MC_SAMPLES:-1}
 NUM_EPOCHS=${NUM_EPOCHS:-3}
 GROUP_SIZE=${GROUP_SIZE:-8}
-EXPLORATION_M=${EXPLORATION_M:-1}
+C3PO_N=${C3PO_N:-1}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
@@ -127,14 +127,14 @@ fi
 if [ "$MIN_ESS" != "$ESS" ] && [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-MINESS_${MIN_ESS}"
 fi
-if [ "$M3PO_MC_SAMPLES" != 1 ]; then
-    EXPNAME="${EXPNAME}-M3PO_MCSAMPLES${M3PO_MC_SAMPLES}"
+if [ "$M3PO_M" != 1 ]; then
+    EXPNAME="${EXPNAME}-M3PO_M${M3PO_M}"
 fi
-if [ "$CM3PO_MC_SAMPLES" != 1 ]; then
-    EXPNAME="${EXPNAME}-CM3PO_MCSAMPLES${CM3PO_MC_SAMPLES}"
+if [ "$DECOUPLED_MC_SAMPLES" != 1 ]; then
+    EXPNAME="${EXPNAME}-DECOUPLED${DECOUPLED_MC_SAMPLES}"
 fi
-if (( "$EXPLORATION_M" > 1 )); then
-    EXPNAME="${EXPNAME}-interleave${EXPLORATION_M}-seqmiss"
+if (( "$C3PO_N" > 1 )); then
+    EXPNAME="${EXPNAME}-C3PO_N${C3PO_N}-seqmiss"
 fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
@@ -162,10 +162,10 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.sync=false \
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
-        actor_rollout_ref.actor.optim.ivon_config.m3po_mc_samples=$M3PO_MC_SAMPLES \
-        actor_rollout_ref.actor.optim.ivon_config.cm3po_mc_samples=$CM3PO_MC_SAMPLES
+        actor_rollout_ref.actor.optim.ivon_config.m3po_m=$M3PO_M \
+        actor_rollout_ref.actor.optim.ivon_config.decoupled_mc_samples=$DECOUPLED_MC_SAMPLES
     "
-    if [ "$IVON_INIT_METHOD" == "realtrained" ]; then
+    if [ "$IVON_INIT_METHOD" == "trained" ]; then
         OPT_ARGS="${OPT_ARGS} \
             +actor_rollout_ref.actor.optim.optimizer_load_path=$MODEL_PATH
         "
@@ -249,7 +249,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.n=$GROUP_SIZE \
-    actor_rollout_ref.rollout.M=$EXPLORATION_M \
+    actor_rollout_ref.rollout.c3po_n=$C3PO_N \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=3072 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \

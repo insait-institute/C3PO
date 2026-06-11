@@ -58,8 +58,8 @@ ivon_config:
   hess_approx: price
   rescale_lr: True
   sync: false
-  m3po_mc_samples: 1
-  cm3po_mc_samples: 1
+  m3po_m: 1
+  decoupled_mc_samples: 1
   clip_radius: 1e-3
   debias: True
   ess_schedule: constant
