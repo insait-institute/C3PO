@@ -79,7 +79,8 @@ PPO_KL_COEF=${PPO_KL_COEF:--1}
 CLIP_COV_RATIO=${CLIP_COV_RATIO:--1}
 CLIP_COV_LB=${CLIP_COV_LB:--1}
 CLIP_COV_UB=${CLIP_COV_UB:--1}
-MC_SAMPLES=${MC_SAMPLES:-1}
+M3PO_MC_SAMPLES=${M3PO_MC_SAMPLES:-1}
+CM3PO_MC_SAMPLES=${CM3PO_MC_SAMPLES:-1}
 NUM_EPOCHS=${NUM_EPOCHS:-3}
 GROUP_SIZE=${GROUP_SIZE:-8}
 EXPLORATION_M=${EXPLORATION_M:-1}
@@ -126,8 +127,11 @@ fi
 if [ "$MIN_ESS" != "$ESS" ] && [ "$OPTIMIZER" == "ivon" ]; then
     EXPNAME="${EXPNAME}-MINESS_${MIN_ESS}"
 fi
-if [ "$MC_SAMPLES" != 1 ]; then
-    EXPNAME="${EXPNAME}-MCSAMPLES${MC_SAMPLES}"
+if [ "$M3PO_MC_SAMPLES" != 1 ]; then
+    EXPNAME="${EXPNAME}-M3PO_MCSAMPLES${M3PO_MC_SAMPLES}"
+fi
+if [ "$CM3PO_MC_SAMPLES" != 1 ]; then
+    EXPNAME="${EXPNAME}-CM3PO_MCSAMPLES${CM3PO_MC_SAMPLES}"
 fi
 if (( "$EXPLORATION_M" > 1 )); then
     EXPNAME="${EXPNAME}-interleave${EXPLORATION_M}-seqmiss"
@@ -158,7 +162,8 @@ if [ "$OPTIMIZER" == "ivon" ]; then
         actor_rollout_ref.actor.optim.ivon_config.sync=false \
         actor_rollout_ref.actor.optim.ivon_config.ess_schedule=$ESS_SCHEDULE \
         actor_rollout_ref.actor.optim.ivon_config.min_ess=$MIN_ESS \
-        actor_rollout_ref.actor.optim.ivon_config.mc_samples=$MC_SAMPLES
+        actor_rollout_ref.actor.optim.ivon_config.m3po_mc_samples=$M3PO_MC_SAMPLES \
+        actor_rollout_ref.actor.optim.ivon_config.cm3po_mc_samples=$CM3PO_MC_SAMPLES
     "
     if [ "$IVON_INIT_METHOD" == "realtrained" ]; then
         OPT_ARGS="${OPT_ARGS} \
