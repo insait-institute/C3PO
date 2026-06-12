@@ -18,7 +18,7 @@ samples model weights from an approximate posterior learned with a variational o
 | Path | Description |
 |------|-------------|
 | `verl/` | Fork of [verl](https://github.com/volcengine/verl) (`v0.8.0.dev`) with the IVON optimizer and the 3PO training loop integrated. |
-| `ivon/` | Fork of the [IVON optimizer](https://github.com/team-approx-bayes/ivon) (`ivon-opt 0.1.3`, GPLv3) modified to support FSDP training. |
+| `ivon/` | Fork of [IVON](https://github.com/team-approx-bayes/ivon) (`ivon-opt 0.1.3`) modified to support FSDP training. |
 | `verl/recipes/` | Launch scripts: `run_sft.sh` (warm-start SFT), `run_rl.sh` (RLVR). |
 | `verl/scripts/data/` | Dataset preparation scripts (DapoMath, Nemotron SFT, eval benchmarks). 
 
@@ -63,7 +63,6 @@ determines the number of GPUs.
 
 ```bash
 MODEL_NAME=olmo3 OPTIMIZER=ivon DATA_NAME=nmt \
-  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash verl/recipes/run_sft.sh
 ```
 
@@ -74,21 +73,20 @@ few IVON knobs:
 
 | Paper method | Invocation |
 |--------------|------------|
-| **GRPO** (baseline) | `OPTIMIZER=adamw METHOD=grpo` |
+| **GRPO** (baseline) | `OPTIMIZER=adamw` |
 | **B3PO** | `OPTIMIZER=ivon` with `ivon_config.use_ivon_rollout_only=true` (single perturbation/step) |
-| **M3PO** | `OPTIMIZER=ivon M3PO_M=M` (e.g. `M=4`, with `GROUP_SIZE=G/M` for an equal-compute comparison) |
+| **M3PO** | `OPTIMIZER=ivon M3PO_M=M` (e.g. `M=4`. To keep compute roughly same as GRPO, set `GROUP_SIZE=G/M`) |
 | **C3PO** | `OPTIMIZER=ivon C3PO_N=N` (`rollout.c3po_n=N` chunks + Seq-MIS correction) |
 
-Example — C3PO on Olmo3 with `N=4`:
+Example - C3PO on Olmo3 with `N=4`:
 
 ```bash
 MODEL_NAME=olmo3 MODEL_TYPE=base OPTIMIZER=ivon \
   C3PO_N=4 GROUP_SIZE=16 ESS=1e9 \
-  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash verl/recipes/run_rl.sh
 ```
 
-`METHOD` also selects action-space baselines that 3PO is compared against / composable with:
+`METHOD` can be used to select action-space methods that 3PO is composable with:
 `grpo_cliphigh`, `grpo_klcov`, `grpo_entloss`, `grpo_clipcov`.
 
 > **Note on naming.** The `DECOUPLED_MC_SAMPLES` / `decoupled_mc_samples` knob corresponds to the
@@ -100,28 +98,30 @@ MODEL_NAME=olmo3 MODEL_TYPE=base OPTIMIZER=ivon \
 `ESS` is the effective sample size **λ** from the paper — the central noise lever. Larger λ ⇒ less
 noise; smaller λ ⇒ more exploration. The main results use:
 
-| Stage | Optimizer | LR | λ (ESS) | Notes |
-|-------|-----------|----|---------|-------|
-| SFT | IVON | 50.0 | 1e10 | wd 1e-8, β=(0.9, 0.9999), `hess_init=0.001`, 2 epochs, 4096 ctx |
-| RLVR | AdamW | 1e-6 | — | wd 0.1, β=(0.9, 0.999) |
-| RLVR | IVON | 1.0 | 1e9 (Olmo3), 1e10 (Qwen2.5-Math) | same IVON config as SFT; Seq-MIS mask `[0.5, 2.0]` for C3PO |
+`M3PO_M` controls the number of MC samples used in M3PO
 
-Common RLVR settings: token-level GRPO, clip low/high = 0.2, binary (+1/0) reward, batch of 32
-prompts × 16 rollouts, effective group size `G=16`, one gradient step per batch, constant LR schedule
-with 6% warmup. By default the IVON Hessian `h` is initialized from a constant `h0` rather than the
+`C3PO_N` controls the number of chunks used in C3PO
+
+`DECOUPLED_MC_SAMPLES` corresponds to the *decoupled* variance-reduction approach from Appendix C
+
+By default the IVON Hessian `h` is initialized from a constant `h0` rather than the
 SFT optimizer state, so the method is drop-in for any off-the-shelf checkpoint (set
 `IVON_INIT_METHOD=trained` to load a learned prior instead).
-
-Evaluation uses temperature 0.6, top-p 0.95, top-k 50, and reports unbiased Pass@1 over `K=8`
-samples.
 
 ## Models & benchmarks
 
 - **Base models:** `allenai/Olmo-3-1025-7B` and `Qwen/Qwen2.5-Math-7B`.
+- **Warm-started models:** ``
 - **Training data:** DapoMath-17k.
 - **Benchmarks:** AIME 2024–2026, MATH-500, AMC 2023, Minerva.
 
-## Licenses
+## Citation
+If you find this work useful, please consider citing:
 
-`verl/` and `ivon/` retain their upstream licenses (see `verl/LICENSE` and `ivon/LICENSE`). The IVON
-optimizer is GPLv3.
+```bibtex
+@misc{venkatkrishna2026parameter,
+      title={Parameter Exploration for RLVR via Variational Learning}, 
+      author={Vatsal Venkatkrishna and Nico Daheim and Iryna Gurevych},
+      year={2026},
+}
+```
