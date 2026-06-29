@@ -149,6 +149,9 @@ def load_reward_manager(
                 sandbox_fusion_url=sandbox_url,
                 concurrent_semaphore=_concurrent_semaphore,
                 memory_limit_mb=memory_limit_mb,
+                retry_on_timeout=sandbox_config.get("retry_on_timeout", True),
+                continuous=sandbox_config.get("continuous", False),
+                sandbox_fusion_timeout=sandbox_config.get("timeout", 10),
             )
         else:
             final_compute_score = default_compute_score

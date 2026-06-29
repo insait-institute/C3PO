@@ -36,11 +36,24 @@ class SandboxFusionConfig(BaseConfig):
         url (Optional[str]): Cloud/local function URL for sandbox execution.
         max_concurrent (int): Max concurrent requests allowed to sandbox.
         memory_limit_mb (int): Max memory limit for each sandbox process in MB.
+        retry_on_timeout (bool): Retry sandbox read timeouts / connection errors
+            (rides out a sandbox server restart) instead of immediately scoring
+            the affected test case as failed.
+        continuous (bool): If True, score the fraction of test cases that pass
+            (partial credit). If False, score a binary verdict: 1.0 iff every
+            test case passes (the check short-circuits on the first failure).
+        timeout (int): Per-test-case compile/run timeout in seconds passed to the
+            sandbox. The historical default of 10s is tuned for C++ reference
+            limits and systematically times out correct-but-slower Python
+            solutions on large inputs; raise it (e.g. 20-30) for Python tasks.
     """
 
     url: Optional[str] = None
     max_concurrent: int = 64
     memory_limit_mb: int = 1024
+    retry_on_timeout: bool = True
+    continuous: bool = False
+    timeout: int = 10
 
 
 @dataclass

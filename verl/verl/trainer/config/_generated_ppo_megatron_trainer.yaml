@@ -589,6 +589,9 @@ reward_model:
     url: null
     max_concurrent: 64
     memory_limit_mb: 1024
+    retry_on_timeout: true
+    continuous: false
+    timeout: 10
   profiler:
     _target_: verl.utils.profiler.ProfilerConfig
     tool: ${oc.select:global_profiler.tool,null}

@@ -83,6 +83,17 @@ sandbox_fusion:
   # Max memory limit for each sandbox process in MB
   memory_limit_mb: 1024
 
+  # Retry sandbox read timeouts / connection errors with backoff (rides out a
+  # sandbox server restart) instead of scoring the affected test case as failed
+  retry_on_timeout: True
+
+  # If True, score the fraction of test cases that pass (partial credit);
+  # if False, binary verdict: 1.0 iff every test case passes
+  continuous: False
+
+  # Per-test-case compile/run timeout in seconds passed to the sandbox
+  timeout: 10
+
 # profile the reward model in `compute_reward` 
 profiler:
 
