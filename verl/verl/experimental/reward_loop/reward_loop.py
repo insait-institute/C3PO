@@ -14,7 +14,9 @@
 
 import asyncio
 import logging
+import multiprocessing
 import os
+from functools import partial
 
 import aiohttp
 import numpy as np
@@ -28,6 +30,7 @@ from verl.single_controller.ray.base import RayResourcePool
 from verl.trainer.ppo.reward import get_custom_reward_fn
 from verl.utils import hf_tokenizer
 from verl.utils.fs import copy_to_local
+from verl.utils.reward_score import default_compute_score
 
 from .reward_manager import get_reward_manager_cls
 from .reward_model import RewardModelManager
@@ -70,6 +73,29 @@ class RewardLoopWorker:
             reward_model_tokenizer_local_path = copy_to_local(self.config.reward_model.model.path)
             self.reward_model_tokenizer = hf_tokenizer(reward_model_tokenizer_local_path, trust_remote_code=True)
         self.reward_fn = get_custom_reward_fn(self.config)
+
+        # When no custom reward function is provided, bind the SandboxFusion
+        # config onto default_compute_score (mirroring trainer.ppo.reward.
+        # load_reward_manager). Without this, run_single calls default_compute_score
+        # with sandbox_fusion_url=None, so code data sources fall through to
+        # prime_code instead of the sandbox executor.
+        # Each RewardLoopWorker is its own Ray actor/process, so this semaphore is
+        # per-worker; server-facing concurrency is num_workers x max_concurrent.
+        if self.reward_fn is None:
+            sandbox_config = self.config.reward_model.get("sandbox_fusion")
+            sandbox_url = sandbox_config.get("url") if sandbox_config else None
+            if sandbox_url:
+                sandbox_manager = multiprocessing.Manager()
+                concurrent_semaphore = sandbox_manager.Semaphore(sandbox_config.get("max_concurrent", 64))
+                self.reward_fn = partial(
+                    default_compute_score,
+                    sandbox_fusion_url=sandbox_url,
+                    concurrent_semaphore=concurrent_semaphore,
+                    memory_limit_mb=sandbox_config.get("memory_limit_mb", 1024),
+                    retry_on_timeout=sandbox_config.get("retry_on_timeout", True),
+                    continuous=sandbox_config.get("continuous", False),
+                    sandbox_fusion_timeout=sandbox_config.get("timeout", 10),
+                )
 
         # Load reward loop manager class
         # Support both registry and importlib loading methods
