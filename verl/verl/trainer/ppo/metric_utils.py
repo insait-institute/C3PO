@@ -588,8 +588,9 @@ def process_validation_metrics(data_sources: list[str], sample_uids: list[str], 
             var_dict = uid_dict.setdefault(uid, {})
 
             for var_name, var_vals in var2vals.items():
-                # skip empty or string values
-                if not var_vals or isinstance(var_vals[0], str):
+                # skip empty values or non-numeric extra info (e.g. the
+                # per-testcase execution summary dict / string)
+                if not var_vals or isinstance(var_vals[0], (str, bytes, dict, list)):
                     continue
 
                 # compute mean and std
