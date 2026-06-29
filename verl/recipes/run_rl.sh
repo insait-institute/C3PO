@@ -3,8 +3,8 @@ set -x
 
 # --- 1. CONFIGURATION / PARAMETERS ---
 # Model Mapping Logic
-MODEL_NAME=${MODEL_NAME:-"olmo3"}   
-MODEL_TYPE=${MODEL_TYPE:-"base"}    
+MODEL_NAME=${MODEL_NAME:-"olmo3"}
+MODEL_TYPE=${MODEL_TYPE:-"base"}
 DEFAULT_TOKENIZER_PATH=null
 DATA_ROOT=${DATA_ROOT:-"${HOME}/bayesrl/verl/data"}
 DATA_NAME=${DATA_NAME:-"dapomath"}
@@ -25,13 +25,13 @@ elif [ "$MODEL_NAME" == "qwm" ]; then
     fi
     TRAIN_DATA=$DATA_ROOT/${MODEL_NAME}-${MODEL_TYPE}-${DATA_NAME}-train.parquet
 elif [ "$MODEL_NAME" == "qwm_nmtron" ]; then
-    MODEL_PATH="BayesRL/qwm7b_nmtron_ivon"
+    MODEL_PATH="BayesRL/Qwen2.5Math-IVON-SFT-7B"
     TRAIN_DATA="$DATA_ROOT/qwm-instruct-${DATA_NAME}-train.parquet"
 elif [ "$MODEL_NAME" == "olmo3_nmtron" ]; then
-    MODEL_PATH="BayesRL/olmo3_nmtron_ivon"
+    MODEL_PATH="BayesRL/Olmo3-IVON-SFT-7B"
     TRAIN_DATA="$DATA_ROOT/olmo3-instruct-${DATA_NAME}-train.parquet"
 elif [ "$MODEL_NAME" == "llama_nmtron" ]; then
-    MODEL_PATH="BayesRL/llama_nmtron_ivon"
+    MODEL_PATH="BayesRL/Llama3.1-IVON-SFT-8B"
     TRAIN_DATA="$DATA_ROOT/llama-instruct-${DATA_NAME}-train.parquet"
 else
     MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-Math-7B"}
@@ -41,8 +41,8 @@ TOKENIZER_PATH=${TOKENIZER_PATH:-$DEFAULT_TOKENIZER_PATH}
 IVON_INIT_METHOD=${IVON_INIT_METHOD:-"scratch"} # scratch or trained
 
 # Basic Training Params
-OPTIMIZER=${OPTIMIZER:-"adamw"}   
-METHOD=${METHOD:-"grpo"}       
+OPTIMIZER=${OPTIMIZER:-"adamw"}
+METHOD=${METHOD:-"grpo"}
 
 # Hyperparameters based on MODEL_TYPE and OPTIMIZER
 if [ "$MODEL_TYPE" == "instruct" ]; then
