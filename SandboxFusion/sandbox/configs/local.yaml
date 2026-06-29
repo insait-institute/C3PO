@@ -1,0 +1,25 @@
+# local.yaml -- Default development configuration for the sandbox service.
+#
+# Selected when SANDBOX_CONFIG is unset or set to "local".
+
+sandbox:
+  # Isolation mode: "lite" (overlayfs + chroot + cgroups) or "full" (Docker).
+  isolation: lite
+  # Maximum number of concurrent sandbox instances.
+  # 16 is a reasonable default for modern multi-core dev machines.
+  max_concurrency: 16
+  # Docker image used when isolation is "full".
+  docker_image: ineil77/sandbox-fusion-server:25042026-2
+  # Default memory limit per sandbox execution (MB). Overridden by per-request memory_limit_MB.
+  default_memory_limit_mb: 8192
+  # Default CPU core limit per sandbox execution.
+  default_cpu_limit: 2
+
+eval:
+  # Maximum number of test cases evaluated in parallel by the runner.
+  # 0 = unlimited; 3 keeps resource usage moderate during local development.
+  max_runner_concurrency: 3
+
+common:
+  # Enable ANSI colour codes in structlog output (handy in a terminal).
+  logging_color: true
