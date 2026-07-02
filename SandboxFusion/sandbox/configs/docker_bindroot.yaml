@@ -1,0 +1,23 @@
+# docker_bindroot.yaml -- Apptainer-compatible lite-equivalent isolation.
+#
+# Selected when SANDBOX_CONFIG=docker_bindroot.
+# Like docker_lite but uses bind-mount-based filesystem isolation in place
+# of overlay, because apptainer's '/' is an overlay-with-locked-children
+# that the kernel refuses to overlay again.
+
+sandbox:
+  isolation: bindroot
+  # Sized for a dedicated 64-core SLURM allocation (see
+  # ~/BashScripts/sandbox_server.sbatch).  Execs are pinned onto leased
+  # groups of default_cpu_limit cores, so keep this <= cores/default_cpu_limit
+  # or the overflow runs unpinned.
+  max_concurrency: 32
+  docker_image: ineil77/sandbox-fusion-server:25042026-2
+  default_memory_limit_mb: 8192
+  default_cpu_limit: 2
+
+eval:
+  max_runner_concurrency: 3
+
+common:
+  logging_color: true

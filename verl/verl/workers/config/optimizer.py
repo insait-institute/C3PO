@@ -111,7 +111,9 @@ class FSDPOptimizerConfig(OptimizerConfig):
     def __post_init__(self):
         if self.warmup_style is not None:
             assert self.warmup_style in ["constant", "cosine"]
-            warnings.warn("`warmup_style` is deprecated, use `lr_scheduler_type` instead.", DeprecationWarning, stacklevel=2)
+            warnings.warn(
+                "`warmup_style` is deprecated, use `lr_scheduler_type` instead.", DeprecationWarning, stacklevel=2
+            )
             self.lr_scheduler_type = self.warmup_style
         assert self.lr_scheduler_type in ["constant", "cosine"]
         return super().__post_init__()
@@ -199,14 +201,22 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         module = importlib.import_module(config.optimizer_impl)
         optimizer_cls = getattr(module, config.optimizer)
     except ImportError as e:
-        raise ImportError(f"Failed to import module '{config.optimizer_impl}'. Make sure the package is installed. Error: {e}") from e
+        raise ImportError(
+            f"Failed to import module '{config.optimizer_impl}'. Make sure the package is installed. Error: {e}"
+        ) from e
     except AttributeError as e:
-        raise AttributeError(f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'.Available optimizers: {dir(module)}") from e
+        raise AttributeError(
+            f"Optimizer '{config.optimizer}' not found in module '{config.optimizer_impl}'.Available optimizers: {dir(module)}"
+        ) from e
 
     optimizer = optimizer_cls(parameters, **optimizer_args)
-    print(f"Before loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}")
-    print(f"Before loading IVON: Momentum sum={optimizer.param_groups[0]['momentum'].sum()}, Momentum min={optimizer.param_groups[0]['momentum'].min()}")
     if config.optimizer_load_path and "ivon" in optimizer_name_lower:
+        print(
+            f"Before loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}"
+        )
+        print(
+            f"Before loading IVON: Momentum sum={optimizer.param_groups[0]['momentum'].sum()}, Momentum min={optimizer.param_groups[0]['momentum'].min()}"
+        )
         print(f"Loading optimizer from {config.optimizer_load_path}")
         optimizer = _load_ivon_checkpoint(optimizer, config.optimizer_load_path)
     if "ivon" in optimizer_name_lower:
@@ -218,8 +228,12 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
             group["beta2"] = config.betas[1]
             group["ess"] = config.ivon_config.ess
             group["clip_radius"] = config.ivon_config.clip_radius
-    print(f"After loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}")
-    print(f"After loading IVON: Momentum sum={optimizer.param_groups[0]['momentum'].sum()}, Momentum min={optimizer.param_groups[0]['momentum'].min()}")
+        print(
+            f"After loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}"
+        )
+        print(
+            f"After loading IVON: Momentum sum={optimizer.param_groups[0]['momentum'].sum()}, Momentum min={optimizer.param_groups[0]['momentum'].min()}"
+        )
     return optimizer
 
 

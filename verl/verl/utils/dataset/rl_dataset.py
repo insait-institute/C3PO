@@ -156,10 +156,15 @@ class RLHFDataset(Dataset):
             # read files and cache
             if parquet_file.endswith(".parquet"):
                 dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
-            elif parquet_file.endswith(".json"):
+            elif parquet_file.endswith(".json") or parquet_file.endswith(".jsonl"):
                 dataframe = datasets.load_dataset("json", data_files=parquet_file)["train"]
             else:
-                raise ValueError(f"Unsupported file format: {parquet_file}")
+                # Otherwise treat the entry as a Hugging Face Hub dataset repo id
+                # (e.g. "OctoReasoner/code-r1-12k"), loading its "train" split.
+                try:
+                    dataframe = datasets.load_dataset(parquet_file)["train"]
+                except Exception as e:
+                    raise ValueError(f"Unsupported file format or dataset repo id: {parquet_file}") from e
             dataframes.append(dataframe)
         self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
 

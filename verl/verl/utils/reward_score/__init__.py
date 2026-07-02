@@ -18,6 +18,34 @@ import re
 from verl.utils.import_utils import deprecated
 
 
+def _summarize_testcase_metadata(metadata_list):
+    """Build a compact per-testcase execution summary from sandbox metadata.
+
+    Returns a dict like ``{"testcase_1": "success", "testcase_2": "runtime_error: ..."}``.
+    This is dumped with rollouts instead of the full test cases, which are large.
+    For failing cases a short reason (truncated stderr / API error) is appended.
+    """
+    summary = {}
+    if not metadata_list:
+        return summary
+    for i, md in enumerate(metadata_list):
+        if not isinstance(md, dict):
+            summary[f"testcase_{i + 1}"] = str(md)[:160]
+            continue
+        idx = md.get("case_index", i)
+        status = md.get("status", "unknown")
+        detail = ""
+        if status != "success":
+            for field in ("api_request_error", "stderr", "compile_stderr"):
+                val = md.get(field)
+                if val:
+                    # collapse whitespace and truncate to keep the dump small
+                    detail = ": " + " ".join(str(val).split())[:160]
+                    break
+        summary[f"testcase_{idx + 1}"] = f"{status}{detail}"
+    return summary
+
+
 def default_compute_score(
     data_source,
     solution_str,
@@ -26,6 +54,9 @@ def default_compute_score(
     sandbox_fusion_url=None,
     concurrent_semaphore=None,
     memory_limit_mb=None,
+    retry_on_timeout=True,
+    continuous=False,
+    sandbox_fusion_timeout=10,
     **kwargs,
 ):
     """Compute the score for a given solution based on the data source.
@@ -85,19 +116,40 @@ def default_compute_score(
         from . import prime_math
 
         res = prime_math.compute_score(solution_str, ground_truth)
-    elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
+    elif data_source in ["codecontests", "apps", "codeforces", "taco"] or "code" in data_source:
         # Use the passed sandbox_fusion_url if available
         if sandbox_fusion_url:
             from . import sandbox_fusion
 
-            # Pass the URL directly, ground_truth likely contains test cases here
-            res = sandbox_fusion.compute_score(sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, solution_str, ground_truth, continuous=True)
+            # Pass the URL directly, ground_truth likely contains test cases here.
+            # continuous (configurable via reward_model.sandbox_fusion.continuous):
+            #   False -> binary verdict, 1.0 iff every test case passes
+            #            (check_correctness short-circuits on the first failure);
+            #   True  -> partial credit, the fraction of test cases that pass.
+            score, metadata_list = sandbox_fusion.compute_score(
+                sandbox_fusion_url,
+                concurrent_semaphore,
+                memory_limit_mb,
+                solution_str,
+                ground_truth,
+                continuous=continuous,
+                retry_on_timeout=retry_on_timeout,
+                timeout=sandbox_fusion_timeout,
+            )
+            # Return the score plus a compact per-testcase execution summary so
+            # rollouts can be dumped without the (large) full test cases. The
+            # reward managers unpack "score"; the rest become reward_extra_info.
+            return {
+                "score": float(score),
+                "acc": float(score),
+                "testcase_summary": _summarize_testcase_metadata(metadata_list),
+            }
         else:
             # If no sandbox URL is provided, fall back to prime_code or raise error
             from . import prime_code
 
             # Assuming prime_code doesn't need the URL
-            res = prime_code.compute_score(solution_str, ground_truth, continuous=True)
+            res = prime_code.compute_score(solution_str, ground_truth, continuous=continuous)
     elif data_source in ["hiyouga/geometry3k"]:
         from . import geo3k
 

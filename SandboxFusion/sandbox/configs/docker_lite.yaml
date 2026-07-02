@@ -1,0 +1,18 @@
+# docker_lite.yaml -- Test configuration for lite isolation inside a Docker container.
+#
+# Selected when SANDBOX_CONFIG=docker_lite.
+# The server runs inside a privileged Docker container and uses
+# overlayfs + chroot + cgroups for sandbox isolation.
+
+sandbox:
+  isolation: lite
+  max_concurrency: 16
+  docker_image: ineil77/sandbox-fusion-server:25042026-2
+  default_memory_limit_mb: 8192
+  default_cpu_limit: 2
+
+eval:
+  max_runner_concurrency: 3
+
+common:
+  logging_color: true
