@@ -467,10 +467,14 @@ class FSDPSFTTrainer:
                 loss = self._compute_loss_and_backward(batch=micro_batch, n_micro_batches=n_micro_batches)
                 step_loss += loss.item()
 
+        # IVON already consumed its gradient statistics at the sampled_params
+        # context exit (or reads p.grad unscaled at step() in single-sample
+        # mode) and clips via its own clip_radius, so only compute the norm.
+        max_norm = float("inf") if self.config.optim.optimizer.lower() == "ivon" else self.config.optim.clip_grad
         if self.config.model.strategy == "fsdp":
-            grad_norm = self.fsdp_model.clip_grad_norm_(max_norm=self.config.optim.clip_grad)
+            grad_norm = self.fsdp_model.clip_grad_norm_(max_norm=max_norm)
         elif self.config.model.strategy == "fsdp2":
-            grad_norm = fsdp2_clip_grad_norm_(self.fsdp_model.parameters(), max_norm=self.config.optim.clip_grad)
+            grad_norm = fsdp2_clip_grad_norm_(self.fsdp_model.parameters(), max_norm=max_norm)
         else:
             raise NotImplementedError(f"not implement {self.config.model.strategy}")
         if isinstance(grad_norm, DTensor):

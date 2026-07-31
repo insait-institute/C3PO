@@ -194,6 +194,21 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         optimizer_args["sync"] = config.ivon_config.sync
         optimizer_args["debias"] = config.ivon_config.debias
         optimizer_args["rescale_lr"] = config.ivon_config.rescale_lr
+        optimizer_args["noise_seed"] = config.ivon_config.get("noise_seed", None)
+        optimizer_args["isotropic_noise"] = config.ivon_config.get("isotropic_noise", False)
+        # M3PO and the decoupled-MC variant are mutually exclusive by design;
+        # both accumulate multiple train=True noise samples per optimizer step,
+        # so exactly one of them may be > 1. The surviving value tells IVON how
+        # many samples to expect: 1 selects the memory-lean single-sample fast
+        # path (no gradient-statistic buffers), > 1 the buffered Welford path.
+        m3po_m = int(config.ivon_config.get("m3po_m", 1))
+        decoupled_mc_samples = int(config.ivon_config.get("decoupled_mc_samples", 1))
+        if m3po_m > 1 and decoupled_mc_samples > 1:
+            raise ValueError(
+                f"m3po_m ({m3po_m}) and decoupled_mc_samples ({decoupled_mc_samples}) are mutually"
+                " exclusive; at most one of them may be > 1."
+            )
+        optimizer_args["train_mc_samples"] = max(m3po_m, decoupled_mc_samples)
 
     if config.override_optimizer_config is not None:
         optimizer_args.update(config.override_optimizer_config)
@@ -228,6 +243,11 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
             group["beta2"] = config.betas[1]
             group["ess"] = config.ivon_config.ess
             group["clip_radius"] = config.ivon_config.clip_radius
+            # Isotropic ablation: a loaded checkpoint may carry a learned
+            # (anisotropic) Hessian. Flatten it back to hess_init so no curvature
+            # shape leaks into the scaled-isotropic-noise run.
+            if config.ivon_config.get("isotropic_noise", False):
+                group["hess"] = torch.full_like(group["hess"], float(config.ivon_config.hess_init))
         print(
             f"After loading IVON: Hess sum={optimizer.param_groups[0]['hess'].sum()}, Hess min={optimizer.param_groups[0]['hess'].min()}"
         )
@@ -265,7 +285,8 @@ def _load_ivon_checkpoint(optimizer, optim_load_path):
         slice_size = optim_numel // world_size
         start, end = rank * slice_size, (rank + 1) * slice_size
         for key in ["momentum", "hess"]:
-            group[key] = group[key][start:end].to("cuda", non_blocking=True).clone()
+            # IVON state is kept in fp32 regardless of the checkpoint dtype
+            group[key] = group[key][start:end].to("cuda", dtype=torch.float32, non_blocking=True).clone()
         group["local_numel"] = slice_size
 
     optimizer.load_state_dict(optim_state_dict)
