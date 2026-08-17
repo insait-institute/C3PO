@@ -83,7 +83,20 @@ M3PO_M=${M3PO_M:-1}
 DECOUPLED_MC_SAMPLES=${DECOUPLED_MC_SAMPLES:-1}
 NUM_EPOCHS=${NUM_EPOCHS:-3}
 GROUP_SIZE=${GROUP_SIZE:-8}
+TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-32}
+# Defaults to the full train batch (single PPO update); the grpo_cliphigh and
+# grpo_clipcov methods override this to TRAIN_BATCH_SIZE/4 below.
+PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-$TRAIN_BATCH_SIZE}
 C3PO_N=${C3PO_N:-1}
+
+# Rollout correction (off-policy IS/RS correction). Default on (sequence IS +
+# seq_sum_k1 RS, bypass mode). Set ROLLOUT_CORRECTION=false to disable entirely
+# (rollout_is=null, rollout_rs=null); EXPNAME is tagged -noRC in that case.
+ROLLOUT_CORRECTION=${ROLLOUT_CORRECTION:-true}
+# Rejection-sampling (outlier masking) level, applied only when ROLLOUT_CORRECTION
+# is on. Default seq_sum_k1. Set ROLLOUT_RS=null to keep Seq-MIS IS on but disable
+# outlier masking (the W4 ablation); EXPNAME is tagged -noRS in that case.
+ROLLOUT_RS=${ROLLOUT_RS:-"seq_sum_k1"}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
@@ -103,14 +116,15 @@ fi
 
 # Apply Method-specific overrides and name updates
 if [ "$METHOD" == "grpo_cliphigh" ]; then
-    CLIP_HIGH=0.5
+    CLIP_HIGH=0.28
+    PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
     EXPNAME="${EXPNAME}-CLIPHIGH${CLIP_HIGH}"
 elif [ "$METHOD" == "grpo_klcov" ]; then
     KL_COV_RATIO=0.2
     PPO_KL_COEF=1
     EXPNAME="${EXPNAME}-KLCOV${KL_COV_RATIO}-PPOKL${PPO_KL_COEF}"
 elif [ "$METHOD" == "grpo_entloss" ]; then
-    ENTROPY_COEF=5e-3
+    ENTROPY_COEF=1e-3
     EXPNAME="${EXPNAME}-ENTCOEF${ENTROPY_COEF}"
 elif [ "$METHOD" == "grpo_clipcov" ]; then
     CLIP_LOW=1
@@ -118,6 +132,7 @@ elif [ "$METHOD" == "grpo_clipcov" ]; then
     CLIP_COV_RATIO=0.0002
     CLIP_COV_LB=1.0
     CLIP_COV_UB=5.0
+    PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
     EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
 fi
 
@@ -138,10 +153,21 @@ if (( "$C3PO_N" > 1 )); then
 fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
+# Rollout correction toggle
+if [ "$ROLLOUT_CORRECTION" == "false" ]; then
+    ROLLOUT_CORR_LINE="algorithm.rollout_correction.rollout_is=null algorithm.rollout_correction.rollout_rs=null"
+    EXPNAME="${EXPNAME}-noRC"
+else
+    ROLLOUT_CORR_LINE="algorithm.rollout_correction.rollout_is=sequence algorithm.rollout_correction.rollout_rs=${ROLLOUT_RS} algorithm.rollout_correction.rollout_is_threshold=2 algorithm.rollout_correction.rollout_is_batch_normalize=false algorithm.rollout_correction.bypass_mode=true"
+    if [ "$ROLLOUT_RS" == "null" ]; then
+        EXPNAME="${EXPNAME}-noRS"
+    fi
+fi
+
 # Handle KL_Cov/Clip_Cov logic
 KL_COV_LINE=""
 if [ "$KL_COV_RATIO" != "-1" ] && [ "$PPO_KL_COEF" != "-1" ]; then
-    KL_COV_LINE="actor_rollout_ref.actor.kl_ctrl.kl_cov_ratio=$KL_COV_RATIO actor_rollout_ref.actor.policy_loss.ppo_kl_coef=$PPO_KL_COEF"
+    KL_COV_LINE="actor_rollout_ref.actor.policy_loss.kl_cov_ratio=$KL_COV_RATIO actor_rollout_ref.actor.policy_loss.ppo_kl_coef=$PPO_KL_COEF"
 fi
 
 CLIP_COV_LINE=""
@@ -199,16 +225,12 @@ SAVE_PATH=$SAVE_ROOT/$EXPNAME
 PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.kl_ctrl.kl_coef=$KL_COEF \
-    algorithm.rollout_correction.rollout_is=sequence \
-    algorithm.rollout_correction.rollout_rs=seq_sum_k1 \
-    algorithm.rollout_correction.rollout_is_threshold=2 \
-    algorithm.rollout_correction.rollout_is_batch_normalize=false \
-    algorithm.rollout_correction.bypass_mode=true \
+    $ROLLOUT_CORR_LINE \
     data.train_files=$TRAIN_DATA \
     data.val_files=$EVAL_DATA \
     data.max_prompt_length=1024 \
     data.max_response_length=3072 \
-    data.train_batch_size=32 \
+    data.train_batch_size=$TRAIN_BATCH_SIZE \
     data.filter_overlong_prompts=true \
     data.shuffle=True \
     actor_rollout_ref.model.path=$MODEL_PATH \
@@ -217,7 +239,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=$PPO_MINI_BATCH_SIZE \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$MAX_TOKEN_LEN \
     actor_rollout_ref.actor.grad_clip=1.0 \

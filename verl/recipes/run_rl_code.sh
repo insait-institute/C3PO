@@ -27,6 +27,10 @@ MODEL_NAME=${MODEL_NAME:-"olmo3"}
 MODEL_TYPE=${MODEL_TYPE:-"base"}
 DEFAULT_TOKENIZER_PATH=null
 
+# DEFAULT_MAX_MODEL_LEN tracks each base model's native max_position_embeddings
+# (vLLM refuses to serve a max_model_len above it). Qwen2.5-Math-7B (and the
+# qwm_nmtron IVON-SFT checkpoint derived from it) only supports 4096; the other
+# bases are long-context (>=32k) so 8192 is a safe rollout window for code.
 if [ "$MODEL_NAME" == "olmo3" ]; then
     if [ "$MODEL_TYPE" == "base" ]; then
         MODEL_PATH="allenai/Olmo-3-1025-7B"
@@ -34,20 +38,26 @@ if [ "$MODEL_NAME" == "olmo3" ]; then
     else
         MODEL_PATH="allenai/Olmo-3-7B-Think-DPO"
     fi
+    DEFAULT_MAX_MODEL_LEN=8192
 elif [ "$MODEL_NAME" == "qwm" ]; then
     if [ "$MODEL_TYPE" == "base" ]; then
         MODEL_PATH="Qwen/Qwen2.5-Math-7B"
     else
         MODEL_PATH="Qwen/Qwen2.5-Math-7B-Instruct"
     fi
+    DEFAULT_MAX_MODEL_LEN=4096
 elif [ "$MODEL_NAME" == "qwm_nmtron" ]; then
     MODEL_PATH="BayesRL/Qwen2.5Math-IVON-SFT-7B"
+    DEFAULT_MAX_MODEL_LEN=4096
 elif [ "$MODEL_NAME" == "olmo3_nmtron" ]; then
     MODEL_PATH="BayesRL/Olmo3-IVON-SFT-7B"
+    DEFAULT_MAX_MODEL_LEN=8192
 elif [ "$MODEL_NAME" == "llama_nmtron" ]; then
     MODEL_PATH="BayesRL/Llama3.1-IVON-SFT-8B"
+    DEFAULT_MAX_MODEL_LEN=8192
 else
     MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-Coder-7B"}
+    DEFAULT_MAX_MODEL_LEN=8192
 fi
 TOKENIZER_PATH=${TOKENIZER_PATH:-$DEFAULT_TOKENIZER_PATH}
 IVON_INIT_METHOD=${IVON_INIT_METHOD:-"scratch"} # scratch or trained
@@ -60,6 +70,9 @@ EVAL_DATA=${EVAL_DATA:-"OctoReasoner/lcb_verl"}
 # Sequence lengths: code prompts/solutions are longer than math.
 MAX_PROMPT_LEN=${MAX_PROMPT_LEN:-2048}
 MAX_RESPONSE_LEN=${MAX_RESPONSE_LEN:-2048}
+# vLLM rollout context; see DEFAULT_MAX_MODEL_LEN above for the per-model cap.
+MAX_MODEL_LEN=${MAX_MODEL_LEN:-$DEFAULT_MAX_MODEL_LEN}
+MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-$((MAX_MODEL_LEN * 2))}
 
 # Basic Training Params
 OPTIMIZER=${OPTIMIZER:-"adamw"}
@@ -177,7 +190,7 @@ fi
 # Handle KL_Cov/Clip_Cov logic
 KL_COV_LINE=""
 if [ "$KL_COV_RATIO" != "-1" ] && [ "$PPO_KL_COEF" != "-1" ]; then
-    KL_COV_LINE="actor_rollout_ref.actor.kl_ctrl.kl_cov_ratio=$KL_COV_RATIO actor_rollout_ref.actor.policy_loss.ppo_kl_coef=$PPO_KL_COEF"
+    KL_COV_LINE="actor_rollout_ref.actor.policy_loss.kl_cov_ratio=$KL_COV_RATIO actor_rollout_ref.actor.policy_loss.ppo_kl_coef=$PPO_KL_COEF"
 fi
 
 CLIP_COV_LINE=""
@@ -272,8 +285,8 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=True \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
-    actor_rollout_ref.rollout.max_num_batched_tokens=16384 \
-    actor_rollout_ref.rollout.max_model_len=8192 \
+    actor_rollout_ref.rollout.max_num_batched_tokens=$MAX_NUM_BATCHED_TOKENS \
+    actor_rollout_ref.rollout.max_model_len=$MAX_MODEL_LEN \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.n=$GROUP_SIZE \
     actor_rollout_ref.rollout.c3po_n=$C3PO_N \
