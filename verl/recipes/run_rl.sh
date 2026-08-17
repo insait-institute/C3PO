@@ -90,6 +90,16 @@ PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-$TRAIN_BATCH_SIZE}
 C3PO_N=${C3PO_N:-1}
 TEMPERATURE=${TEMPERATURE:-1.0}
 
+# Training seed for multi-run error bars. Drives the two nuisance RNG sources
+# whose ordering we want *paired* across methods (AdamW-seedN vs IVON-seedN see
+# the same prompt shuffle / mini-batch order): data.seed and actor.data_loader_seed.
+# Deliberately does NOT touch ivon_config.noise_seed: the IVON posterior noise is
+# the training stochasticity under test, so it is left null (fresh OS entropy per
+# run) so each seed is an independent draw from that distribution. vLLM rollout
+# sampling is likewise left free (not reproducible, contributes equally to both).
+# SEED unset => legacy behaviour (data.seed=null); EXPNAME is only tagged when set.
+SEED=${SEED:-""}
+
 # Rollout correction (off-policy IS/RS correction). Default on (sequence IS +
 # seq_sum_k1 RS, bypass mode). Set ROLLOUT_CORRECTION=false to disable entirely
 # (rollout_is=null, rollout_rs=null); EXPNAME is tagged -noRC in that case.
@@ -169,6 +179,9 @@ fi
 if (( "$C3PO_N" > 1 )); then
     EXPNAME="${EXPNAME}-C3PO_N${C3PO_N}-seqmiss"
 fi
+if [ -n "$SEED" ]; then
+    EXPNAME="${EXPNAME}-seed${SEED}"
+fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
 # Rollout correction toggle
@@ -191,6 +204,13 @@ fi
 CLIP_COV_LINE=""
 if [ "$CLIP_COV_RATIO" != "-1" ] && [ "$CLIP_COV_LB" != "-1" ] && [ "$CLIP_COV_UB" != "-1" ]; then
     CLIP_COV_LINE="actor_rollout_ref.actor.policy_loss.clip_cov_ratio=$CLIP_COV_RATIO actor_rollout_ref.actor.policy_loss.clip_cov_lb=$CLIP_COV_LB actor_rollout_ref.actor.policy_loss.clip_cov_ub=$CLIP_COV_UB"
+fi
+
+# Training-seed line (paired nuisance RNG). Empty unless SEED is set, in which
+# case both the data shuffle and the actor mini-batch ordering are pinned to it.
+SEED_LINE=""
+if [ -n "$SEED" ]; then
+    SEED_LINE="data.seed=$SEED actor_rollout_ref.actor.data_loader_seed=$SEED"
 fi
 
 # Optimizer args
@@ -315,5 +335,6 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.nnodes=$nnodes \
     trainer.n_gpus_per_node=$nproc_per_node \
     trainer.validation_data_dir=$SAVE_PATH/eval_gens \
+    $SEED_LINE \
     $KL_COV_LINE \
     $CLIP_COV_LINE
