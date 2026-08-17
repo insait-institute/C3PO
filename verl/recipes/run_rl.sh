@@ -88,6 +88,7 @@ TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-32}
 # grpo_clipcov methods override this to TRAIN_BATCH_SIZE/4 below.
 PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-$TRAIN_BATCH_SIZE}
 C3PO_N=${C3PO_N:-1}
+TEMPERATURE=${TEMPERATURE:-1.0}
 
 # Rollout correction (off-policy IS/RS correction). Default on (sequence IS +
 # seq_sum_k1 RS, bypass mode). Set ROLLOUT_CORRECTION=false to disable entirely
@@ -97,6 +98,14 @@ ROLLOUT_CORRECTION=${ROLLOUT_CORRECTION:-true}
 # is on. Default seq_sum_k1. Set ROLLOUT_RS=null to keep Seq-MIS IS on but disable
 # outlier masking (the W4 ablation); EXPNAME is tagged -noRS in that case.
 ROLLOUT_RS=${ROLLOUT_RS:-"seq_sum_k1"}
+
+# Adaptive-temperature entropy-collapse guard (AdamW baseline).
+# When ADAPTIVE_TEMP=true, the rollout temperature is raised from TEMPERATURE to
+# TEMP_HIGH once the policy entropy H_t drops below LOW_ENT_RATIO * H_0, where H_0
+# is the first measured entropy. See docs/adaptive_temperature_baseline.md.
+ADAPTIVE_TEMP=${ADAPTIVE_TEMP:-false}
+TEMP_HIGH=${TEMP_HIGH:-1.0}
+LOW_ENT_RATIO=${LOW_ENT_RATIO:-0.5}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
@@ -134,6 +143,15 @@ elif [ "$METHOD" == "grpo_clipcov" ]; then
     CLIP_COV_UB=5.0
     PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
     EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
+elif [ "$METHOD" == "grpo_adaptivetemp" ]; then
+    # AdamW baseline: bump temperature when entropy collapses.
+    ADAPTIVE_TEMP=true
+    TEMP_HIGH=${TEMP_HIGH:-1.2}
+    LOW_ENT_RATIO=${LOW_ENT_RATIO:-0.5}
+fi
+
+if [ "$ADAPTIVE_TEMP" == "true" ]; then
+    EXPNAME="${EXPNAME}-ADAPTTEMP_H${TEMP_HIGH}_R${LOW_ENT_RATIO}"
 fi
 
 if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ]; then
@@ -269,7 +287,10 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.55 \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
     actor_rollout_ref.rollout.max_model_len=4096 \
-    actor_rollout_ref.rollout.temperature=1.0 \
+    actor_rollout_ref.rollout.temperature=$TEMPERATURE \
+    actor_rollout_ref.rollout.adaptive_temperature=$ADAPTIVE_TEMP \
+    actor_rollout_ref.rollout.temp_high=$TEMP_HIGH \
+    actor_rollout_ref.rollout.low_ent_ratio=$LOW_ENT_RATIO \
     actor_rollout_ref.rollout.n=$GROUP_SIZE \
     actor_rollout_ref.rollout.c3po_n=$C3PO_N \
     actor_rollout_ref.rollout.calculate_log_probs=True \

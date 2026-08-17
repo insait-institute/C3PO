@@ -147,6 +147,17 @@ class RolloutConfig(BaseConfig):
     c3po_n: int = 1
     repetition_penalty: float = 1.0
 
+    # Adaptive-temperature entropy-collapse guard (AdamW baseline).
+    # When enabled, the driver watches the per-step policy entropy H_t against a
+    # reference H_0 (the first measured entropy). Once H_t drops below
+    # low_ent_ratio * H_0 the rollout sampling temperature is raised to temp_high
+    # to re-inject exploration. See docs/adaptive_temperature_baseline.md.
+    adaptive_temperature: bool = False
+    # TEMP_HIGH: sampling temperature to switch to once entropy has collapsed.
+    temp_high: float = 1.0
+    # LOW_ENT_RATIO: collapse threshold as a fraction of the reference entropy H_0.
+    low_ent_ratio: float = 0.5
+
     # Early termination threshold for multi-turn rollout in sglang.
     # Abort remaining requests when (1 - over_sample_rate) * total_requests are completed.
     over_sample_rate: float = 0.0
