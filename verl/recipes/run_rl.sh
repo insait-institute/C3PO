@@ -83,7 +83,39 @@ M3PO_M=${M3PO_M:-1}
 DECOUPLED_MC_SAMPLES=${DECOUPLED_MC_SAMPLES:-1}
 NUM_EPOCHS=${NUM_EPOCHS:-3}
 GROUP_SIZE=${GROUP_SIZE:-8}
+TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-32}
+# Defaults to the full train batch (single PPO update); the grpo_cliphigh and
+# grpo_clipcov methods override this to TRAIN_BATCH_SIZE/4 below.
+PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-$TRAIN_BATCH_SIZE}
 C3PO_N=${C3PO_N:-1}
+TEMPERATURE=${TEMPERATURE:-1.0}
+
+# Training seed for multi-run error bars. Drives the two nuisance RNG sources
+# whose ordering we want *paired* across methods (AdamW-seedN vs IVON-seedN see
+# the same prompt shuffle / mini-batch order): data.seed and actor.data_loader_seed.
+# Deliberately does NOT touch ivon_config.noise_seed: the IVON posterior noise is
+# the training stochasticity under test, so it is left null (fresh OS entropy per
+# run) so each seed is an independent draw from that distribution. vLLM rollout
+# sampling is likewise left free (not reproducible, contributes equally to both).
+# SEED unset => legacy behaviour (data.seed=null); EXPNAME is only tagged when set.
+SEED=${SEED:-""}
+
+# Rollout correction (off-policy IS/RS correction). Default on (sequence IS +
+# seq_sum_k1 RS, bypass mode). Set ROLLOUT_CORRECTION=false to disable entirely
+# (rollout_is=null, rollout_rs=null); EXPNAME is tagged -noRC in that case.
+ROLLOUT_CORRECTION=${ROLLOUT_CORRECTION:-true}
+# Rejection-sampling (outlier masking) level, applied only when ROLLOUT_CORRECTION
+# is on. Default seq_sum_k1. Set ROLLOUT_RS=null to keep Seq-MIS IS on but disable
+# outlier masking (the W4 ablation); EXPNAME is tagged -noRS in that case.
+ROLLOUT_RS=${ROLLOUT_RS:-"seq_sum_k1"}
+
+# Adaptive-temperature entropy-collapse guard (AdamW baseline).
+# When ADAPTIVE_TEMP=true, the rollout temperature is raised from TEMPERATURE to
+# TEMP_HIGH once the policy entropy H_t drops below LOW_ENT_RATIO * H_0, where H_0
+# is the first measured entropy. See docs/adaptive_temperature_baseline.md.
+ADAPTIVE_TEMP=${ADAPTIVE_TEMP:-false}
+TEMP_HIGH=${TEMP_HIGH:-1.0}
+LOW_ENT_RATIO=${LOW_ENT_RATIO:-0.5}
 
 if [ "$OPTIMIZER" == "ivon" ]; then
     BETAS=${BETAS:-"[0.9,0.9999]"}
@@ -103,14 +135,15 @@ fi
 
 # Apply Method-specific overrides and name updates
 if [ "$METHOD" == "grpo_cliphigh" ]; then
-    CLIP_HIGH=0.5
+    CLIP_HIGH=0.28
+    PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
     EXPNAME="${EXPNAME}-CLIPHIGH${CLIP_HIGH}"
 elif [ "$METHOD" == "grpo_klcov" ]; then
     KL_COV_RATIO=0.2
     PPO_KL_COEF=1
     EXPNAME="${EXPNAME}-KLCOV${KL_COV_RATIO}-PPOKL${PPO_KL_COEF}"
 elif [ "$METHOD" == "grpo_entloss" ]; then
-    ENTROPY_COEF=5e-3
+    ENTROPY_COEF=1e-3
     EXPNAME="${EXPNAME}-ENTCOEF${ENTROPY_COEF}"
 elif [ "$METHOD" == "grpo_clipcov" ]; then
     CLIP_LOW=1
@@ -118,7 +151,17 @@ elif [ "$METHOD" == "grpo_clipcov" ]; then
     CLIP_COV_RATIO=0.0002
     CLIP_COV_LB=1.0
     CLIP_COV_UB=5.0
+    PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
     EXPNAME="${EXPNAME}-CLIPCOV${CLIP_COV_RATIO}-CLIPCOVLB${CLIP_COV_LB}-CLIPCOVUB${CLIP_COV_UB}"
+elif [ "$METHOD" == "grpo_adaptivetemp" ]; then
+    # AdamW baseline: bump temperature when entropy collapses.
+    ADAPTIVE_TEMP=true
+    TEMP_HIGH=${TEMP_HIGH:-1.2}
+    LOW_ENT_RATIO=${LOW_ENT_RATIO:-0.5}
+fi
+
+if [ "$ADAPTIVE_TEMP" == "true" ]; then
+    EXPNAME="${EXPNAME}-ADAPTTEMP_H${TEMP_HIGH}_R${LOW_ENT_RATIO}"
 fi
 
 if [ -n "$ESS_SCHEDULE" ] && [ "$ESS_SCHEDULE" != "constant" ]; then
@@ -136,17 +179,38 @@ fi
 if (( "$C3PO_N" > 1 )); then
     EXPNAME="${EXPNAME}-C3PO_N${C3PO_N}-seqmiss"
 fi
+if [ -n "$SEED" ]; then
+    EXPNAME="${EXPNAME}-seed${SEED}"
+fi
 
 # --- 3. DYNAMIC ARGUMENT CONSTRUCTION ---
+# Rollout correction toggle
+if [ "$ROLLOUT_CORRECTION" == "false" ]; then
+    ROLLOUT_CORR_LINE="algorithm.rollout_correction.rollout_is=null algorithm.rollout_correction.rollout_rs=null"
+    EXPNAME="${EXPNAME}-noRC"
+else
+    ROLLOUT_CORR_LINE="algorithm.rollout_correction.rollout_is=sequence algorithm.rollout_correction.rollout_rs=${ROLLOUT_RS} algorithm.rollout_correction.rollout_is_threshold=2 algorithm.rollout_correction.rollout_is_batch_normalize=false algorithm.rollout_correction.bypass_mode=true"
+    if [ "$ROLLOUT_RS" == "null" ]; then
+        EXPNAME="${EXPNAME}-noRS"
+    fi
+fi
+
 # Handle KL_Cov/Clip_Cov logic
 KL_COV_LINE=""
 if [ "$KL_COV_RATIO" != "-1" ] && [ "$PPO_KL_COEF" != "-1" ]; then
-    KL_COV_LINE="actor_rollout_ref.actor.kl_ctrl.kl_cov_ratio=$KL_COV_RATIO actor_rollout_ref.actor.policy_loss.ppo_kl_coef=$PPO_KL_COEF"
+    KL_COV_LINE="actor_rollout_ref.actor.policy_loss.kl_cov_ratio=$KL_COV_RATIO actor_rollout_ref.actor.policy_loss.ppo_kl_coef=$PPO_KL_COEF"
 fi
 
 CLIP_COV_LINE=""
 if [ "$CLIP_COV_RATIO" != "-1" ] && [ "$CLIP_COV_LB" != "-1" ] && [ "$CLIP_COV_UB" != "-1" ]; then
     CLIP_COV_LINE="actor_rollout_ref.actor.policy_loss.clip_cov_ratio=$CLIP_COV_RATIO actor_rollout_ref.actor.policy_loss.clip_cov_lb=$CLIP_COV_LB actor_rollout_ref.actor.policy_loss.clip_cov_ub=$CLIP_COV_UB"
+fi
+
+# Training-seed line (paired nuisance RNG). Empty unless SEED is set, in which
+# case both the data shuffle and the actor mini-batch ordering are pinned to it.
+SEED_LINE=""
+if [ -n "$SEED" ]; then
+    SEED_LINE="data.seed=$SEED actor_rollout_ref.actor.data_loader_seed=$SEED"
 fi
 
 # Optimizer args
@@ -199,16 +263,12 @@ SAVE_PATH=$SAVE_ROOT/$EXPNAME
 PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.kl_ctrl.kl_coef=$KL_COEF \
-    algorithm.rollout_correction.rollout_is=sequence \
-    algorithm.rollout_correction.rollout_rs=seq_sum_k1 \
-    algorithm.rollout_correction.rollout_is_threshold=2 \
-    algorithm.rollout_correction.rollout_is_batch_normalize=false \
-    algorithm.rollout_correction.bypass_mode=true \
+    $ROLLOUT_CORR_LINE \
     data.train_files=$TRAIN_DATA \
     data.val_files=$EVAL_DATA \
     data.max_prompt_length=1024 \
     data.max_response_length=3072 \
-    data.train_batch_size=32 \
+    data.train_batch_size=$TRAIN_BATCH_SIZE \
     data.filter_overlong_prompts=true \
     data.shuffle=True \
     actor_rollout_ref.model.path=$MODEL_PATH \
@@ -217,7 +277,7 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=$PPO_MINI_BATCH_SIZE \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$MAX_TOKEN_LEN \
     actor_rollout_ref.actor.grad_clip=1.0 \
@@ -247,7 +307,10 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.55 \
     actor_rollout_ref.rollout.max_num_batched_tokens=8192 \
     actor_rollout_ref.rollout.max_model_len=4096 \
-    actor_rollout_ref.rollout.temperature=1.0 \
+    actor_rollout_ref.rollout.temperature=$TEMPERATURE \
+    actor_rollout_ref.rollout.adaptive_temperature=$ADAPTIVE_TEMP \
+    actor_rollout_ref.rollout.temp_high=$TEMP_HIGH \
+    actor_rollout_ref.rollout.low_ent_ratio=$LOW_ENT_RATIO \
     actor_rollout_ref.rollout.n=$GROUP_SIZE \
     actor_rollout_ref.rollout.c3po_n=$C3PO_N \
     actor_rollout_ref.rollout.calculate_log_probs=True \
@@ -272,5 +335,6 @@ PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
     trainer.nnodes=$nnodes \
     trainer.n_gpus_per_node=$nproc_per_node \
     trainer.validation_data_dir=$SAVE_PATH/eval_gens \
+    $SEED_LINE \
     $KL_COV_LINE \
     $CLIP_COV_LINE

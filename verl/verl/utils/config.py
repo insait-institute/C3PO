@@ -193,8 +193,11 @@ def validate_config(
         )
 
     # check eval config
+    # Guard the *validation* sampling temperature only. The training rollout
+    # temperature is allowed to be 0 (greedy) for GRPO, so it must not be
+    # asserted here.
     if config.actor_rollout_ref.rollout.val_kwargs.do_sample:
-        assert config.actor_rollout_ref.rollout.temperature > 0, (
+        assert config.actor_rollout_ref.rollout.val_kwargs.temperature > 0, (
             "validation gen temperature should be greater than 0 when enabling do_sample"
         )
 

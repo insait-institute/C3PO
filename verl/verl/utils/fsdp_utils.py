@@ -196,28 +196,33 @@ def load_fsdp2_model_to_gpu(model):
     model.to(device)
 
 
-@torch.no_grad()
-def offload_fsdp_optimizer(optimizer):
+def _move_optimizer_state(optimizer, device):
     if not optimizer.state:
         return
+    # Per-param states (AdamW-style) plus flat buffers that live directly under
+    # string keys in optimizer.state or in the param_groups (IVON keeps its
+    # momentum/hess there instead of in per-param state).
+    for key, value in list(optimizer.state.items()):
+        if isinstance(value, torch.Tensor):
+            optimizer.state[key] = value.to(device, non_blocking=True)
+        elif isinstance(value, dict):
+            for state_key, state_value in value.items():
+                if isinstance(state_value, torch.Tensor):
+                    value[state_key] = state_value.to(device, non_blocking=True)
     for param_group in optimizer.param_groups:
-        for param in param_group["params"]:
-            state = optimizer.state[param]
-            for key, value in state.items():
-                if isinstance(value, torch.Tensor):
-                    state[key] = value.to("cpu", non_blocking=True)
+        for key, value in param_group.items():
+            if key != "params" and isinstance(value, torch.Tensor):
+                param_group[key] = value.to(device, non_blocking=True)
+
+
+@torch.no_grad()
+def offload_fsdp_optimizer(optimizer):
+    _move_optimizer_state(optimizer, "cpu")
 
 
 @torch.no_grad()
 def load_fsdp_optimizer(optimizer, device_id):
-    if not optimizer.state:
-        return
-    for param_group in optimizer.param_groups:
-        for param in param_group["params"]:
-            state = optimizer.state[param]
-            for key, value in state.items():
-                if isinstance(value, torch.Tensor):
-                    state[key] = value.to(device_id, non_blocking=True)
+    _move_optimizer_state(optimizer, device_id)
 
 
 @contextmanager

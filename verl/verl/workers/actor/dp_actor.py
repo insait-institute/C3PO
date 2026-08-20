@@ -370,12 +370,18 @@ class DataParallelPPOActor(BasePPOActor):
         assert self.config.grad_clip is not None
         if self.scaler is not None:
             self.scaler.unscale_(self.actor_optimizer)
+        # IVON captures its gradient statistics before this point (buffered path)
+        # or reads p.grad at step() (single-sample path) and applies its own
+        # clip_radius, so the clip scaling must not touch p.grad: compute the
+        # norm with max_norm=inf, keeping the grad_norm metric and the
+        # non-finite skip below intact.
+        max_norm = float("inf") if hasattr(self.actor_optimizer, "_is_noised") else self.config.grad_clip
         if isinstance(self.actor_module, FSDP):
-            grad_norm = self.actor_module.clip_grad_norm_(max_norm=self.config.grad_clip)
+            grad_norm = self.actor_module.clip_grad_norm_(max_norm=max_norm)
         elif isinstance(self.actor_module, FSDPModule):
-            grad_norm = fsdp2_clip_grad_norm_(self.actor_module.parameters(), max_norm=self.config.grad_clip)
+            grad_norm = fsdp2_clip_grad_norm_(self.actor_module.parameters(), max_norm=max_norm)
         else:
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_module.parameters(), max_norm=self.config.grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_module.parameters(), max_norm=max_norm)
 
         if isinstance(grad_norm, DTensor):
             grad_norm = grad_norm.full_tensor()
@@ -421,6 +427,11 @@ class DataParallelPPOActor(BasePPOActor):
 
         micro_batch_size = data.meta_info["micro_batch_size"]
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
+        # temperature=0 means greedy rollout (e.g. C3PO with noised greedy
+        # decoders). Dividing logits by 0 yields inf/nan, so floor it at a tiny
+        # value: the division then sharpens the softmax toward the argmax, which
+        # matches greedy decoding (matches the fsdp engine path's clamp).
+        temperature = max(temperature, 1e-8)
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
         pad_token_id = data.meta_info.get("pad_token_id", 0)
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
@@ -480,6 +491,11 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
+        # temperature=0 means greedy rollout (e.g. C3PO with noised greedy
+        # decoders). Dividing logits by 0 yields inf/nan, so floor it at a tiny
+        # value: the division then sharpens the softmax toward the argmax, which
+        # matches greedy decoding (matches the fsdp engine path's clamp).
+        temperature = max(temperature, 1e-8)
         pad_token_id = data.meta_info.get("pad_token_id", 0)
 
         select_keys = [

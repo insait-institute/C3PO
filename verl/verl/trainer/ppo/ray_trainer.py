@@ -1186,7 +1186,10 @@ class RayPPOTrainer:
         rollout_config = self.config.actor_rollout_ref.rollout
         batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
         # TODO: Make "temperature" single source of truth from generation.
-        batch.meta_info["temperature"] = rollout_config.temperature
+        # Preserve a temperature already set for this batch (e.g. the adaptive
+        # temperature latched by the entropy-collapse guard) so the actor update
+        # scales logits with the same temperature the rollout used.
+        batch.meta_info["temperature"] = batch.meta_info.get("temperature", rollout_config.temperature)
         batch.meta_info["is_mc_sample_ivon"] = is_mc_sample_ivon
         batch.meta_info["should_take_step"] = should_take_step
         # update actor
@@ -1195,6 +1198,10 @@ class RayPPOTrainer:
             # step 2: convert from padding to no-padding
             batch_td = left_right_2_no_padding(batch_td)
             calculate_entropy = self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
+            # The adaptive-temperature guard needs a per-step entropy signal; in
+            # bypass mode with entropy_coeff=0 the actor update is the only place
+            # entropy is measured, so force it on when the guard is enabled.
+            calculate_entropy = calculate_entropy or self.config.actor_rollout_ref.rollout.get("adaptive_temperature", False)
             ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
             ppo_mini_batch_size = ppo_mini_batch_size * self.config.actor_rollout_ref.rollout.n
             ppo_epochs = self.config.actor_rollout_ref.actor.ppo_epochs
@@ -1315,6 +1322,20 @@ class RayPPOTrainer:
 
         is_mc_sample_ivon = m3po_m > 1 or decoupled_mc_samples > 1
 
+        # Adaptive-temperature entropy-collapse guard (AdamW baseline).
+        #   H_0        := entropy_ref, the first measured policy entropy
+        #   H_t        := the entropy measured at step t
+        #   trigger    := H_t < low_ent_ratio * H_0
+        #   on trigger := rollout temperature latches base -> temp_high (one-way)
+        # See docs/adaptive_temperature_baseline.md for the derivation.
+        rollout_cfg = self.config.actor_rollout_ref.rollout
+        self._adaptive_temp_enabled = rollout_cfg.get("adaptive_temperature", False)
+        self._temp_high = rollout_cfg.get("temp_high", rollout_cfg.temperature)
+        self._low_ent_ratio = rollout_cfg.get("low_ent_ratio", 0.5)
+        self._entropy_ref = None  # H_0, set from the first measured entropy
+        self._temp_bumped = False  # latch: once collapse triggers, stay hot
+        self._rollout_temperature = rollout_cfg.temperature
+
         for epoch in range(current_epoch, self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 for mc_sample_idx in range(m3po_m):
@@ -1328,7 +1349,12 @@ class RayPPOTrainer:
                         self._start_profiling(not prev_step_profile and curr_step_profile if self.config.global_profiler.profile_continuous_steps else curr_step_profile)
 
                     batch: DataProto = DataProto.from_single_dict(batch_dict)
-                    batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
+                    # Use the (possibly bumped) adaptive temperature. It equals the
+                    # configured base temperature unless the entropy-collapse guard
+                    # has latched it to temp_high. Kept consistent across rollout,
+                    # old-log-prob, and actor update so importance-sampling and
+                    # entropy scaling all see the same temperature.
+                    batch.meta_info["temperature"] = self._rollout_temperature
 
                     # add uid to batch
                     batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
@@ -1337,6 +1363,7 @@ class RayPPOTrainer:
 
                     # pass global_steps to trace
                     gen_batch.meta_info["global_steps"] = self.global_steps
+                    gen_batch.meta_info["temperature"] = self._rollout_temperature
                     n_total = self.config.actor_rollout_ref.rollout.n
                     c3po_n = self.config.actor_rollout_ref.rollout.c3po_n
                     n_per_iter = n_total // c3po_n
@@ -1627,6 +1654,25 @@ class RayPPOTrainer:
 
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
+
+                        # Adaptive-temperature entropy-collapse guard (AdamW baseline).
+                        # Update the controller from this step's entropy H_t. The new
+                        # temperature applies to the next step's rollout.
+                        if self._adaptive_temp_enabled and "actor/entropy" in metrics:
+                            cur_entropy = metrics["actor/entropy"]
+                            if self._entropy_ref is None:  # H_0 := first measured entropy
+                                self._entropy_ref = cur_entropy
+                            if not self._temp_bumped and cur_entropy < self._low_ent_ratio * self._entropy_ref:
+                                self._temp_bumped = True
+                                self._rollout_temperature = self._temp_high
+                                print(
+                                    f"[adaptive-temp] step {self.global_steps}: entropy {cur_entropy:.4f} < "
+                                    f"{self._low_ent_ratio} * H0 ({self._entropy_ref:.4f}); "
+                                    f"raising rollout temperature -> {self._temp_high}"
+                                )
+                            metrics["actor/entropy_ref"] = self._entropy_ref
+                            metrics["actor/rollout_temperature"] = self._rollout_temperature
+                            metrics["actor/temp_high_active"] = float(self._temp_bumped)
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)

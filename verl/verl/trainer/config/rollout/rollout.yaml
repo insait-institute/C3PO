@@ -10,6 +10,17 @@ mode: async
 # Sampling temperature for rollout.
 temperature: 1.0
 
+# Adaptive-temperature entropy-collapse guard (AdamW baseline).
+# When true, the rollout temperature is raised to temp_high once the policy
+# entropy H_t falls below low_ent_ratio * H_0 (H_0 = first measured entropy).
+adaptive_temperature: False
+
+# TEMP_HIGH: sampling temperature to switch to once entropy has collapsed.
+temp_high: 1.0
+
+# LOW_ENT_RATIO: collapse threshold as a fraction of the reference entropy H_0.
+low_ent_ratio: 0.5
+
 # Top-k sampling parameter. -1 for vLLM rollout, 0 for HF rollout.
 top_k: -1
 
